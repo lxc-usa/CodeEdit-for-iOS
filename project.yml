@@ -16,6 +16,18 @@ packages:
   TreeSitterLanguages:
     url: https://github.com/simonbs/TreeSitterLanguages
     version: 0.1.10
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel
+    exactVersion: 0.12.1
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.20.0
+  NIOSSH:
+    # 本地 vendoring（含 RSA-SHA2 补丁，复用 openCoder），见 Vendor/swift-nio-ssh/PATCHES.md
+    path: Vendor/swift-nio-ssh
+  SwiftNIO:
+    url: https://github.com/apple/swift-nio.git
+    from: 2.81.0
 
 targets:
   CodeEdit:
@@ -30,8 +42,8 @@ targets:
     info:
       path: CodeEdit/Info.plist
       properties:
-        CFBundleDisplayName: codeEditor
-        CFBundleName: codeEditor
+        CFBundleDisplayName: CodeEdit for iOS
+        CFBundleName: CodeEdit
         CFBundleShortVersionString: "1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
@@ -88,6 +100,14 @@ targets:
           - TreeSitterMarkdownRunestone
           - TreeSitterSQLRunestone
           - TreeSitterLuaRunestone
+      - package: Citadel
+        product: Citadel
+      - package: SwiftTerm
+        product: SwiftTerm
+      - package: NIOSSH
+        product: NIOSSH
+      - package: SwiftNIO
+        product: NIO
 
 schemes:
   CodeEdit:

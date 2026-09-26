@@ -51,9 +51,12 @@ final class WorkspaceStore: ObservableObject {
     @Published var workspaceName: String = ""
     /// 已保存的外部工作区（仅保留解析成功、可用的）。
     @Published var savedWorkspaces: [ResolvedWorkspace] = []
-    /// 当前工作区 id；nil = 本地 Documents。
+    /// 当前工作区 id；nil = 本地 Documents（远程工作区另见 remoteFS）。
     @Published var activeWorkspaceId: UUID?
-    var isLocalWorkspace: Bool { activeWorkspaceId == nil }
+    var isLocalWorkspace: Bool { activeWorkspaceId == nil && remoteFS == nil }
+    /// 远程文件系统；非 nil 表示当前是远程工作区（SFTP/WebDAV/…）。
+    /// 为保持本地路径零回归，所有文件操作在此分支，本地代码原样不动。
+    var remoteFS: (any RemoteFileSystem)?
 
     init() {
         rootURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -68,7 +71,12 @@ final class WorkspaceStore: ObservableObject {
     // MARK: - 文件树
 
     /// 递归加载文件夹的全部 children。文件夹在前、文件在后，各自按系统排序。
+    /// 远程工作区只加载一层（子目录展开时懒加载），走异步分支。
     func refresh(item: FileItem) {
+        if remoteFS != nil {
+            Task { await loadRemoteChildren(of: item, force: true) }
+            return
+        }
         guard item.isDirectory else { return }
         var items: [FileItem] = []
         do {
@@ -80,6 +88,7 @@ final class WorkspaceStore: ObservableObject {
             for url in urls {
                 let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                 let child = FileItem(url: url, isDirectory: isDir)
+                child.parent = item
                 if isDir { refresh(item: child) }
                 items.append(child)
             }
@@ -125,9 +134,13 @@ final class WorkspaceStore: ObservableObject {
     // MARK: - 打开 / 关闭
 
     func open(_ item: FileItem) {
-        guard !item.isDirectory else { return }
+        guard !item.isDirectory, !item.isLoadingPlaceholder else { return }
         if let doc = openDocuments.first(where: { $0.url == item.url }) {
             selectedDocument = doc
+            return
+        }
+        if let fs = remoteFS {
+            Task { await openRemote(item, fs: fs) }
             return
         }
         do {
@@ -151,7 +164,6 @@ final class WorkspaceStore: ObservableObject {
 
     func close(_ doc: EditorDocument) {
         cancelPendingSave(for: doc)
-        doc.save()
         guard let idx = openDocuments.firstIndex(where: { $0 === doc }) else { return }
         openDocuments.remove(at: idx)
         if selectedDocument === doc {
@@ -160,6 +172,12 @@ final class WorkspaceStore: ObservableObject {
             } else {
                 selectedDocument = openDocuments[min(idx, openDocuments.count - 1)]
             }
+        }
+        // 先从标签页摘掉（UI 即时响应），保存放后台：远程保存是网络 I/O，必须 await
+        if doc.remoteFS != nil {
+            Task { await doc.saveAndWait() }
+        } else {
+            doc.save()
         }
     }
 
@@ -181,6 +199,10 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func createFile(name: String, in folder: FileItem) {
+        if let fs = remoteFS {
+            Task { await createRemoteFile(name: name, in: folder, fs: fs) }
+            return
+        }
         let targetFolder = folder.isDirectory ? folder : rootItem
         let url = uniqueURL(in: targetFolder.url, name: name)
         guard FileManager.default.createFile(atPath: url.path, contents: Data(), attributes: nil) else { return }
@@ -190,6 +212,10 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func createFolder(name: String, in folder: FileItem) {
+        if let fs = remoteFS {
+            Task { await createRemoteFolder(name: name, in: folder, fs: fs) }
+            return
+        }
         let targetFolder = folder.isDirectory ? folder : rootItem
         let url = uniqueURL(in: targetFolder.url, name: name)
         do {
@@ -203,6 +229,10 @@ final class WorkspaceStore: ObservableObject {
 
     /// 重命名。若有打开的文档位于该路径下（文件本身或文件夹内），先保存关闭再按新路径重开。
     func rename(item: FileItem, newName: String) {
+        if item.isRemote {
+            Task { await renameRemote(item: item, newName: newName) }
+            return
+        }
         let newURL = item.url.deletingLastPathComponent().appendingPathComponent(newName)
         guard newURL != item.url,
               !FileManager.default.fileExists(atPath: newURL.path) else { return }
@@ -246,6 +276,10 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func delete(item: FileItem) {
+        if item.isRemote {
+            Task { await deleteRemote(item: item) }
+            return
+        }
         let path = item.url.path
         let affected = openDocuments.filter {
             $0.url.path == path || $0.url.path.hasPrefix(path + "/")
@@ -327,7 +361,9 @@ final class WorkspaceStore: ObservableObject {
     }
 
     /// 切换工作区：保存并关闭全部文档，重建文件树。
+    /// 切到本地工作区时先断开远程连接。
     private func activateWorkspace(url: URL, name: String, id: UUID?, persist: Bool = true) {
+        disconnectRemote()
         saveAll()
         openDocuments.removeAll()
         selectedDocument = nil
@@ -422,11 +458,17 @@ final class WorkspaceStore: ObservableObject {
         saveWorkItems[doc.id] = nil
     }
 
-    /// 切后台时调用，立即保存全部 dirty 文档。
+    /// 切后台时调用，立即保存全部 dirty 文档（远程走 await，保证落盘）。
     func saveAll() {
         for (_, work) in saveWorkItems { work.cancel() }
         saveWorkItems.removeAll()
-        for doc in openDocuments { doc.save() }
+        for doc in openDocuments {
+            if doc.remoteFS != nil {
+                Task { await doc.saveAndWait() }
+            } else {
+                doc.save()
+            }
+        }
     }
 
     // MARK: - 首次启动
@@ -446,5 +488,278 @@ final class WorkspaceStore: ObservableObject {
         try? content.write(to: url, atomically: true, encoding: .utf8)
         refresh(item: rootItem)
         if let item = findItem(at: url) { open(item) }
+    }
+
+    // MARK: - 远程工作区（SFTP/WebDAV/FTP/SMB，经 RemoteFileSystem 抽象）
+
+    /// 持久化的远程工作区引用（服务器配置本身由 ServerStore 存）。
+    private struct SavedRemoteWorkspace: Codable {
+        var serverID: UUID
+        var path: String
+        var scheme: String
+    }
+
+    private static let activeRemoteWorkspaceKey = "codeedit.activeRemoteWorkspace"
+
+    /// 当前远程工作区的服务器 id（remoteFS 非 nil 时有效）。
+    var remoteServerID: UUID? {
+        guard remoteFS != nil else { return nil }
+        return UUID(uuidString: rootItem.url.host ?? "")
+    }
+
+    /// 远程工作区的显示副标题（如 "user@host:22 · /home/user/src"）。
+    var remoteSubtitle: String? {
+        guard let fs = remoteFS else { return nil }
+        return "\(fs.displayName) · \(rootItem.url.path)"
+    }
+
+    /// 由合成 URL 反查服务器 id（host 段即 serverID）。
+    private func serverID(of item: FileItem) -> UUID {
+        UUID(uuidString: item.url.host ?? "") ?? UUID()
+    }
+
+    /// 构造远程 FileItem 的合成 URL：<scheme>://<serverID>/<path>。
+    static func remoteURL(scheme: String, serverID: UUID, path: String) -> URL {
+        var c = URLComponents()
+        c.scheme = scheme
+        c.host = serverID.uuidString
+        c.path = path.hasPrefix("/") ? path : "/" + path
+        return c.url!
+    }
+
+    /// 打开远程文件夹作为工作区：先连通验证，再切换（与本地"打开文件夹"对等）。
+    /// path 为空则打开服务器主目录。
+    func openRemoteWorkspace(server: ServerConfig, path: String) {
+        Task {
+            let fs = SFTPFileSystem(server: server)
+            do {
+                let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+                let resolved = trimmed.isEmpty
+                    ? try await fs.homeDirectory()
+                    : try await SSHManager.shared.realPath(server: server, path: trimmed)
+                disconnectRemote()
+                saveAll()
+                openDocuments.removeAll()
+                selectedDocument = nil
+                remoteFS = fs
+                let url = Self.remoteURL(scheme: fs.urlScheme, serverID: server.id, path: resolved)
+                rootItem = FileItem(url: url, isDirectory: true)
+                rootItem.name = resolved == "/" ? server.name
+                    : "\(server.name) / \(URL(fileURLWithPath: resolved).lastPathComponent)"
+                workspaceName = rootItem.name
+                activeWorkspaceId = nil
+                persistRemoteWorkspace(serverID: server.id, path: resolved, scheme: fs.urlScheme)
+                await loadRemoteChildren(of: rootItem, force: true)
+                treeDidChange()
+            } catch {
+                alertMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 断开远程连接并切回本地（切换/删除服务器时调用）。
+    func disconnectRemote() {
+        guard let fs = remoteFS else { return }
+        remoteFS = nil
+        UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceKey)
+        if let sftp = fs as? SFTPFileSystem {
+            Task { await sftp.disconnect() }
+        }
+    }
+
+    /// 若当前远程工作区属于该服务器，先断开（删服务器时调用）。
+    func disconnectRemoteIfNeeded(serverID: UUID) {
+        if remoteServerID == serverID {
+            disconnectRemote()
+            activateWorkspace(url: rootURL, name: localWorkspaceName, id: nil)
+        }
+    }
+
+    private func persistRemoteWorkspace(serverID: UUID, path: String, scheme: String) {
+        let ref = SavedRemoteWorkspace(serverID: serverID, path: path, scheme: scheme)
+        if let data = try? JSONEncoder().encode(ref) {
+            UserDefaults.standard.set(data, forKey: Self.activeRemoteWorkspaceKey)
+        }
+    }
+
+    /// App 启动后恢复上次的远程工作区（由 CodeEditApp 在 servers 就绪后调用一次）。
+    func restoreRemoteWorkspaceIfNeeded(servers: ServerStore) {
+        guard remoteFS == nil,
+              let data = UserDefaults.standard.data(forKey: Self.activeRemoteWorkspaceKey),
+              let ref = try? JSONDecoder().decode(SavedRemoteWorkspace.self, from: data),
+              let server = servers.server(id: ref.serverID) else { return }
+        // 占位，避免 onAppear 重复触发
+        UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceKey)
+        openRemoteWorkspace(server: server, path: ref.path)
+    }
+
+    // MARK: - 远程文件操作（与本地同语义，异步走网络）
+
+    /// 加载远程目录的一层 children。子目录初始挂"加载中…"占位节点，
+    /// 用户展开时由占位行的 .task 触发真实加载（见 FileBrowserView）。
+    func loadRemoteChildren(of dir: FileItem, force: Bool = false) async {
+        guard let fs = remoteFS, dir.isDirectory, !dir.isLoadingPlaceholder else { return }
+        if !force, let kids = dir.children,
+           !kids.contains(where: { $0.isLoadingPlaceholder }) { return }
+        do {
+            let entries = try await fs.list(path: dir.url.path)
+            let sid = serverID(of: dir)
+            var items: [FileItem] = entries.map { e in
+                let child = FileItem(
+                    url: Self.remoteURL(scheme: fs.urlScheme, serverID: sid, path: e.path),
+                    isDirectory: e.isDirectory
+                )
+                child.parent = dir
+                if e.isDirectory {
+                    child.children = [.loadingPlaceholder(parent: child)]
+                }
+                return child
+            }
+            items.sort {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+            dir.children = items
+            treeDidChange()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private func openRemote(_ item: FileItem, fs: any RemoteFileSystem) async {
+        do {
+            let data = try await fs.read(path: item.url.path)
+            guard data.count <= Self.maxOpenableSize else {
+                alertMessage = NSLocalizedString("文件过大，无法打开", comment: "File too large alert")
+                return
+            }
+            guard !data.contains(0) else {
+                alertMessage = NSLocalizedString("二进制文件不支持", comment: "Binary file alert")
+                return
+            }
+            // 并发双开保护：等待网络时用户可能又点了一次
+            if let existing = openDocuments.first(where: { $0.url == item.url }) {
+                selectedDocument = existing
+                return
+            }
+            let doc = EditorDocument(url: item.url, text: String(data: data, encoding: .utf8) ?? "")
+            doc.remoteFS = fs
+            openDocuments.append(doc)
+            selectedDocument = doc
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    /// 远程重名时加序号（先 list 再算，与本地 uniqueURL 对等）。
+    private func uniqueRemoteName(existing: [String], name: String) -> String {
+        guard existing.contains(name) else { return name }
+        var i = 1
+        let ns = name as NSString
+        var candidate = name
+        repeat {
+            let base = ns.deletingPathExtension
+            let ext = ns.pathExtension
+            candidate = ext.isEmpty ? "\(base) \(i)" : "\(base) \(i).\(ext)"
+            i += 1
+        } while existing.contains(candidate)
+        return candidate
+    }
+
+    private func createRemoteFile(name: String, in folder: FileItem, fs: any RemoteFileSystem) async {
+        let targetFolder = (folder.isDirectory && !folder.isLoadingPlaceholder) ? folder : rootItem
+        do {
+            let entries = try await fs.list(path: targetFolder.url.path)
+            let finalName = uniqueRemoteName(existing: entries.map(\.name), name: name)
+            let newPath = (targetFolder.url.path as NSString).appendingPathComponent(finalName)
+            try await fs.write(path: newPath, data: Data())
+            await loadRemoteChildren(of: targetFolder, force: true)
+            let url = Self.remoteURL(scheme: fs.urlScheme, serverID: serverID(of: targetFolder), path: newPath)
+            if let item = findItem(at: url) { open(item) }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private func createRemoteFolder(name: String, in folder: FileItem, fs: any RemoteFileSystem) async {
+        let targetFolder = (folder.isDirectory && !folder.isLoadingPlaceholder) ? folder : rootItem
+        do {
+            let entries = try await fs.list(path: targetFolder.url.path)
+            let finalName = uniqueRemoteName(existing: entries.map(\.name), name: name)
+            let newPath = (targetFolder.url.path as NSString).appendingPathComponent(finalName)
+            try await fs.createDirectory(path: newPath)
+            await loadRemoteChildren(of: targetFolder, force: true)
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private func renameRemote(item: FileItem, newName: String) async {
+        guard let fs = remoteFS, !item.isLoadingPlaceholder else { return }
+        let parentPath = (item.url.path as NSString).deletingLastPathComponent
+        let newPath = (parentPath as NSString).appendingPathComponent(newName)
+        guard newPath != item.url.path else { return }
+        do {
+            // 重名保护：与本地 rename 的 fileExists 检查对等
+            let siblings = try await fs.list(path: parentPath)
+            guard !siblings.map(\.name).contains(newName) else { return }
+            let oldPath = item.url.path
+            let affected = openDocuments.filter {
+                $0.url.path == oldPath || $0.url.path.hasPrefix(oldPath + "/")
+            }
+            let previouslySelectedURL = selectedDocument?.url
+            for doc in affected {
+                cancelPendingSave(for: doc)
+                await doc.saveAndWait()
+            }
+            try await fs.rename(from: oldPath, to: newPath)
+            openDocuments.removeAll { doc in affected.contains { $0 === doc } }
+            if let parent = item.parent {
+                await loadRemoteChildren(of: parent, force: true)
+            }
+            let sid = serverID(of: item)
+            for doc in affected {
+                let suffix = String(doc.url.path.dropFirst(oldPath.count))
+                let reopenURL = Self.remoteURL(scheme: fs.urlScheme, serverID: sid, path: newPath + suffix)
+                if let newItem = findItem(at: reopenURL) { open(newItem) }
+            }
+            if let prev = previouslySelectedURL {
+                let mapped: URL
+                if prev.path == oldPath || prev.path.hasPrefix(oldPath + "/") {
+                    let suffix = String(prev.path.dropFirst(oldPath.count))
+                    mapped = Self.remoteURL(scheme: fs.urlScheme, serverID: sid, path: newPath + suffix)
+                } else {
+                    mapped = prev
+                }
+                selectedDocument = openDocuments.first { $0.url == mapped }
+            } else {
+                selectedDocument = nil
+            }
+            treeDidChange()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteRemote(item: FileItem) async {
+        guard let fs = remoteFS, !item.isLoadingPlaceholder else { return }
+        let path = item.url.path
+        let affected = openDocuments.filter {
+            $0.url.path == path || $0.url.path.hasPrefix(path + "/")
+        }
+        let selectedWasAffected = affected.contains { $0 === selectedDocument }
+        for doc in affected { cancelPendingSave(for: doc) }
+        openDocuments.removeAll { doc in affected.contains { $0 === doc } }
+        if selectedWasAffected { selectedDocument = openDocuments.last }
+        do {
+            try await fs.delete(path: path, isDirectory: item.isDirectory)
+        } catch {
+            alertMessage = error.localizedDescription
+            return
+        }
+        if let parent = item.parent {
+            await loadRemoteChildren(of: parent, force: true)
+        }
+        treeDidChange()
     }
 }

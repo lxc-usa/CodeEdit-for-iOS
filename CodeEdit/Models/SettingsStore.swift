@@ -29,6 +29,19 @@ final class SettingsStore: ObservableObject {
     @Published var showInvisibles: Bool {
         didSet { UserDefaults.standard.set(showInvisibles, forKey: "codeedit.showInvisibles") }
     }
+    // MARK: - 远程终端（复用 openCoder 的 MonoFont / InteractiveShell）
+    /// 终端等宽字体。
+    @Published var monoFont: MonoFont {
+        didSet { UserDefaults.standard.set(monoFont.rawValue, forKey: "codeedit.monoFont") }
+    }
+    /// 终端字号。
+    @Published var monoFontSize: Double {
+        didSet { UserDefaults.standard.set(monoFontSize, forKey: "codeedit.monoFontSize") }
+    }
+    /// 终端会话保持：离开终端页后会话在后台继续，回来时接上。
+    @Published var terminalResumeSession: Bool {
+        didSet { UserDefaults.standard.set(terminalResumeSession, forKey: "codeedit.terminalResumeSession") }
+    }
 
     init() {
         let defaults = UserDefaults.standard
@@ -42,5 +55,9 @@ final class SettingsStore: ObservableObject {
         let savedTabWidth = defaults.double(forKey: "codeedit.tabWidth")
         tabWidth = savedTabWidth > 0 ? savedTabWidth : 4
         showInvisibles = defaults.object(forKey: "codeedit.showInvisibles") as? Bool ?? false
+        monoFont = MonoFont(rawValue: defaults.string(forKey: "codeedit.monoFont") ?? "") ?? .sfMono
+        let savedMonoSize = defaults.double(forKey: "codeedit.monoFontSize")
+        monoFontSize = savedMonoSize > 0 ? savedMonoSize : 13
+        terminalResumeSession = defaults.object(forKey: "codeedit.terminalResumeSession") as? Bool ?? false
     }
 }

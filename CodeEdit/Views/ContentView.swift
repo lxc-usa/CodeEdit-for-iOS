@@ -7,10 +7,13 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var workspace: WorkspaceStore
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var servers: ServerStore
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showSettings = false
     @State private var showDrawer = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+    /// 非 nil 时全屏打开该服务器的远程终端。
+    @State private var terminalServer: ServerConfig?
 
     var body: some View {
         if sizeClass == .compact {
@@ -24,7 +27,7 @@ struct ContentView: View {
 
     private var splitLayout: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            FileBrowserView(workspace: workspace)
+            FileBrowserView(workspace: workspace, servers: servers, onOpenTerminal: openTerminal)
         } detail: {
             EditorAreaView(workspace: workspace, settings: settings)
                 .navigationBarTitleDisplayMode(.inline)
@@ -41,6 +44,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: settings)
         }
+        .fullScreenCover(item: $terminalServer) { server in
+            terminalCover(server: server)
+        }
     }
 
     // MARK: - iPhone：编辑器 + 文件抽屉
@@ -48,7 +54,7 @@ struct ContentView: View {
     private var compactLayout: some View {
         NavigationStack {
             EditorAreaView(workspace: workspace, settings: settings)
-                .navigationTitle(workspace.selectedDocument?.displayName ?? "codeEditor")
+                .navigationTitle(workspace.selectedDocument?.displayName ?? "CodeEdit")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
@@ -76,9 +82,12 @@ struct ContentView: View {
                             withAnimation(.easeInOut(duration: 0.25)) { showDrawer = false }
                         }
                     NavigationStack {
-                        FileBrowserView(workspace: workspace) {
+                        FileBrowserView(workspace: workspace, servers: servers) {
                             // 打开文件后抽屉自动缩回
                             withAnimation(.easeInOut(duration: 0.25)) { showDrawer = false }
+                        } onOpenTerminal: { serverID in
+                            withAnimation(.easeInOut(duration: 0.25)) { showDrawer = false }
+                            openTerminal(serverID: serverID)
                         }
                     }
                     .frame(width: 300)
@@ -89,6 +98,32 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: settings)
+        }
+        .fullScreenCover(item: $terminalServer) { server in
+            terminalCover(server: server)
+        }
+    }
+
+    // MARK: - 远程终端
+
+    private func openTerminal(serverID: UUID) {
+        guard let server = servers.server(id: serverID) else { return }
+        terminalServer = server
+    }
+
+    @ViewBuilder
+    private func terminalCover(server: ServerConfig) -> some View {
+        NavigationStack {
+            TerminalView(serverID: server.id, initialPath: nil, servers: servers, settings: settings)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            terminalServer = nil
+                        } label: {
+                            Label("关闭", systemImage: "xmark")
+                        }
+                    }
+                }
         }
     }
 }

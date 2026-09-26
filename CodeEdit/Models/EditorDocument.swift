@@ -10,13 +10,15 @@ final class EditorDocument: Identifiable, ObservableObject {
     @Published var isDirty = false
     /// 由文件扩展名判定的 Tree-sitter 语言，nil 表示纯文本。
     let language: TreeSitterLanguage?
+    /// 远程文档：打开时由 WorkspaceStore 注入，保存时走远程文件系统。
+    var remoteFS: (any RemoteFileSystem)?
 
     var displayName: String { url.lastPathComponent }
 
     init(url: URL, text: String) {
         self.url = url
         self.text = text
-        self.id = url.path
+        self.id = url.absoluteString
         self.language = LanguageSupport.treeSitterLanguage(for: url)
     }
 
@@ -24,9 +26,38 @@ final class EditorDocument: Identifiable, ObservableObject {
         if !isDirty { isDirty = true }
     }
 
-    /// 保存到磁盘。成功后清除 dirty，失败则保持 dirty 等待下次保存。
+    /// 异步保存并等待完成（重命名/删除/切换工作区前调用，避免竞态）。
+    func saveAndWait() async {
+        guard isDirty else { return }
+        if let fs = remoteFS {
+            do {
+                try await fs.write(path: url.path, data: Data(text.utf8))
+                isDirty = false
+            } catch {
+                // 保持 dirty，交由自动保存/手动保存重试
+            }
+            return
+        }
+        save()
+    }
+
+    /// 保存。本地写磁盘，远程走 RemoteFileSystem；成功后清除 dirty，
+    /// 失败则保持 dirty 等待下次保存。
     func save() {
         guard isDirty else { return }
+        if let fs = remoteFS {
+            let text = text
+            let path = url.path
+            Task { [weak self] in
+                do {
+                    try await fs.write(path: path, data: Data(text.utf8))
+                    await MainActor.run { self?.isDirty = false }
+                } catch {
+                    // 保持 dirty，交由自动保存/手动保存重试，不抛错打断 UI
+                }
+            }
+            return
+        }
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
             isDirty = false
