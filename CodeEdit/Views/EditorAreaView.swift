@@ -99,6 +99,7 @@ private struct DocTab: View {
 
 private struct WelcomeView: View {
     @ObservedObject var workspace: WorkspaceStore
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         VStack(spacing: 16) {
@@ -107,7 +108,7 @@ private struct WelcomeView: View {
                 .foregroundStyle(.secondary)
             Text("选择或新建文件开始")
                 .font(.headline)
-            Text("轻触左侧文件列表开始编辑")
+            Text(sizeClass == .compact ? "轻触左上角按钮打开文件抽屉" : "轻触左侧文件列表开始编辑")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {

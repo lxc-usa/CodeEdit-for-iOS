@@ -2,8 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 左侧文件浏览器：树形文件列表，新建/重命名/删除/导入/分享。
+/// 在 iPhone 抽屉里使用时，通过 onOpenFile 在打开文件后收回抽屉。
 struct FileBrowserView: View {
     @ObservedObject var workspace: WorkspaceStore
+    var onOpenFile: (() -> Void)? = nil
 
     @State private var showImporter = false
     @State private var importTarget: FileItem?
@@ -123,6 +125,7 @@ struct FileBrowserView: View {
                       let item = workspace.findItem(withID: id),
                       !item.isDirectory else { return }
                 workspace.open(item)
+                onOpenFile?()
             }
         )
     }
