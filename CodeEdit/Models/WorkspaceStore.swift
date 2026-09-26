@@ -17,6 +17,11 @@ final class WorkspaceStore: ObservableObject {
     private var saveWorkItems: [String: DispatchWorkItem] = [:]
 
     // MARK: - 工作区位置（把整个文件夹当工作区打开，CodeEdit 桌面版理念：没有“导入”，只有“打开文件夹”）
+    //
+    // iOS 要点：.withSecurityScope 是 macOS-only，iOS 上不可用（Xcode 直接报错）。
+    // 来自文件选择器的 URL 本身就带 security scope：创建 bookmark 前先
+    // startAccessingSecurityScopedResource()，解析后也先 startAccessing，scope
+    // 会隐式保留在 bookmark 数据里；options 用 [] 即可。
 
     /// 持久化的工作区记录（本地 Documents 之外）。
     struct SavedWorkspace: Codable {
@@ -273,13 +278,13 @@ final class WorkspaceStore: ObservableObject {
         for var record in saved {
             var stale = false
             guard let url = try? URL(resolvingBookmarkData: record.bookmark,
-                                     options: .withSecurityScope,
+                                     options: [],
                                      bookmarkDataIsStale: &stale),
                   url.startAccessingSecurityScopedResource() else {
                 continue // 解析失败：丢弃该记录
             }
             if stale,
-               let fresh = try? url.bookmarkData(options: .withSecurityScope,
+               let fresh = try? url.bookmarkData(options: [],
                                                  includingResourceValuesForKeys: nil,
                                                  relativeTo: nil) {
                 record.bookmark = fresh
@@ -357,12 +362,12 @@ final class WorkspaceStore: ObservableObject {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
               isDir.boolValue else { return }
-        guard let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+        guard let bookmark = try? url.bookmarkData(options: [],
                                                    includingResourceValuesForKeys: nil,
                                                    relativeTo: nil) else { return }
         var stale = false
         guard let resolved = try? URL(resolvingBookmarkData: bookmark,
-                                      options: .withSecurityScope,
+                                      options: [],
                                       bookmarkDataIsStale: &stale) else { return }
         let path = resolved.standardized.path
         if path == rootURL.standardized.path {
