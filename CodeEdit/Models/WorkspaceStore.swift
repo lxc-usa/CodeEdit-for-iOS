@@ -57,6 +57,20 @@ final class WorkspaceStore: ObservableObject {
         findItem(at: url, in: rootItem)
     }
 
+    /// 在文件树中按 id（= url.path）查找节点，供侧边栏 selection 用。
+    func findItem(withID id: String) -> FileItem? {
+        findItem(withID: id, in: rootItem)
+    }
+
+    private func findItem(withID id: String, in item: FileItem) -> FileItem? {
+        if item.id == id { return item }
+        guard let children = item.children else { return nil }
+        for child in children {
+            if let found = findItem(withID: id, in: child) { return found }
+        }
+        return nil
+    }
+
     private func findItem(at url: URL, in item: FileItem) -> FileItem? {
         if item.url == url { return item }
         guard let children = item.children else { return nil }

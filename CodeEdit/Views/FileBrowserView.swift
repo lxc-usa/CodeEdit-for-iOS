@@ -13,12 +13,11 @@ struct FileBrowserView: View {
     @State private var shareItem: ShareItem?
 
     var body: some View {
-        List(workspace.rootItem.children ?? [], children: \.children) { item in
+        // selection 驱动 NavigationSplitView：iPhone 折叠模式下点行自动推入详情页，
+        // iPad 上保持侧边栏高亮与详情同步。数据源是 selectedDocument，标签页切换也会同步。
+        List(workspace.rootItem.children ?? [], children: \.children, selection: fileSelection) { item in
             FileRow(item: item)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    if !item.isDirectory { workspace.open(item) }
-                }
                 .contextMenu { contextMenu(for: item) }
         }
         .listStyle(.sidebar)
@@ -110,6 +109,23 @@ struct FileBrowserView: View {
     }
 
     // MARK: - 行视图
+
+    /// 侧边栏单选绑定：读侧取当前打开文档对应的行，写侧只接受文件（文件夹点选只展开，不导航）。
+    private var fileSelection: Binding<Set<String>> {
+        Binding(
+            get: {
+                guard let url = workspace.selectedDocument?.url,
+                      let item = workspace.findItem(at: url) else { return [] }
+                return [item.id]
+            },
+            set: { newIDs in
+                guard let id = newIDs.first,
+                      let item = workspace.findItem(withID: id),
+                      !item.isDirectory else { return }
+                workspace.open(item)
+            }
+        )
+    }
 
     @ViewBuilder
     private func FileRow(item: FileItem) -> some View {
