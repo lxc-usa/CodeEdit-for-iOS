@@ -86,7 +86,9 @@ struct FileBrowserView: View {
         }
         .fileImporter(
             isPresented: $showImporter,
-            allowedContentTypes: [.item],
+            // .folder 显式声明后，系统文件选择器允许直接选中整个目录导入；
+            // copyItem 本就递归拷贝目录，refresh 也递归重建树。
+            allowedContentTypes: [.item, .folder],
             allowsMultipleSelection: true
         ) { result in
             switch result {
