@@ -46,6 +46,8 @@ final class ServerStore: ObservableObject {
         persist()
     }
 
+    /// @MainActor：内部调 TerminalSessionCache.shared.discard（@MainActor 隔离）。
+    @MainActor
     func delete(_ server: ServerConfig) {
         servers.removeAll { $0.id == server.id }
         KeychainStore.delete(account: KeychainStore.passwordAccount(for: server.id))
