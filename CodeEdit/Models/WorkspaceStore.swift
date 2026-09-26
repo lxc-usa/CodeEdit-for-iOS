@@ -16,10 +16,47 @@ final class WorkspaceStore: ObservableObject {
 
     private var saveWorkItems: [String: DispatchWorkItem] = [:]
 
+    // MARK: - 工作区位置（把整个文件夹当工作区打开，CodeEdit 桌面版理念：没有“导入”，只有“打开文件夹”）
+
+    /// 持久化的工作区记录（本地 Documents 之外）。
+    struct SavedWorkspace: Codable {
+        var id: UUID
+        var name: String
+        var bookmark: Data
+    }
+
+    /// 解析后的工作区：持有 security-scoped 访问直到被移除或进程结束。
+    final class ResolvedWorkspace: Identifiable {
+        let id: UUID
+        var name: String
+        var bookmark: Data
+        let url: URL
+        init(id: UUID, name: String, bookmark: Data, url: URL) {
+            self.id = id
+            self.name = name
+            self.bookmark = bookmark
+            self.url = url
+        }
+    }
+
+    private static let savedWorkspacesKey = "codeedit.savedWorkspaces"
+    private static let activeWorkspaceKey = "codeedit.activeWorkspace"
+
+    /// 当前工作区显示名（本地=“本地文件”，外部=文件夹名）。
+    @Published var workspaceName: String = ""
+    /// 已保存的外部工作区（仅保留解析成功、可用的）。
+    @Published var savedWorkspaces: [ResolvedWorkspace] = []
+    /// 当前工作区 id；nil = 本地 Documents。
+    @Published var activeWorkspaceId: UUID?
+    var isLocalWorkspace: Bool { activeWorkspaceId == nil }
+
     init() {
         rootURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         rootItem = FileItem(url: rootURL, isDirectory: true)
+        workspaceName = NSLocalizedString("本地文件", comment: "Local workspace name")
         refresh(item: rootItem)
+        loadSavedWorkspaces()
+        restoreActiveWorkspace()
         seedWelcomeIfNeeded()
     }
 
@@ -121,7 +158,7 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    // MARK: - 新建 / 重命名 / 删除 / 导入
+    // MARK: - 新建 / 重命名 / 删除
 
     /// 在重名时自动加序号，返回最终 URL。
     private func uniqueURL(in folder: URL, name: String) -> URL {
@@ -143,6 +180,7 @@ final class WorkspaceStore: ObservableObject {
         let url = uniqueURL(in: targetFolder.url, name: name)
         guard FileManager.default.createFile(atPath: url.path, contents: Data(), attributes: nil) else { return }
         refresh(item: rootItem)
+        treeDidChange()
         if let item = findItem(at: url) { open(item) }
     }
 
@@ -155,6 +193,7 @@ final class WorkspaceStore: ObservableObject {
             return
         }
         refresh(item: rootItem)
+        treeDidChange()
     }
 
     /// 重命名。若有打开的文档位于该路径下（文件本身或文件夹内），先保存关闭再按新路径重开。
@@ -198,6 +237,7 @@ final class WorkspaceStore: ObservableObject {
         } else {
             selectedDocument = nil
         }
+        treeDidChange()
     }
 
     func delete(item: FileItem) {
@@ -215,21 +255,148 @@ final class WorkspaceStore: ObservableObject {
             return
         }
         refresh(item: rootItem)
+        treeDidChange()
     }
 
-    func importFiles(_ urls: [URL], to folder: FileItem) {
-        let targetFolder = folder.isDirectory ? folder : rootItem
-        for url in urls {
-            let didAccess = url.startAccessingSecurityScopedResource()
-            defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-            let dest = uniqueURL(in: targetFolder.url, name: url.lastPathComponent)
-            do {
-                try FileManager.default.copyItem(at: url, to: dest)
-            } catch {
-                continue
+    // MARK: - 工作区切换
+
+    private var localWorkspaceName: String {
+        NSLocalizedString("本地文件", comment: "Local workspace name")
+    }
+
+    /// 从 UserDefaults 加载已保存的工作区：解析 bookmark，stale 则刷新，失败则丢弃。
+    private func loadSavedWorkspaces() {
+        guard let data = UserDefaults.standard.data(forKey: Self.savedWorkspacesKey),
+              let saved = try? JSONDecoder().decode([SavedWorkspace].self, from: data) else { return }
+        var refreshed: [SavedWorkspace] = []
+        var needsSave = false
+        for var record in saved {
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: record.bookmark,
+                                     options: .withSecurityScope,
+                                     bookmarkDataIsStale: &stale),
+                  url.startAccessingSecurityScopedResource() else {
+                continue // 解析失败：丢弃该记录
+            }
+            if stale,
+               let fresh = try? url.bookmarkData(options: .withSecurityScope,
+                                                 includingResourceValuesForKeys: nil,
+                                                 relativeTo: nil) {
+                record.bookmark = fresh
+                needsSave = true
+            }
+            let exists = (try? url.checkResourceIsReachable()) ?? false
+            if exists {
+                // 访问权为整个 App 会话持有，移除工作区或进程结束时释放
+                savedWorkspaces.append(ResolvedWorkspace(id: record.id, name: record.name,
+                                                         bookmark: record.bookmark, url: url))
+                refreshed.append(record)
+            } else {
+                url.stopAccessingSecurityScopedResource()
+                needsSave = true // 文件夹已不存在：丢弃
             }
         }
+        if needsSave { persistWorkspaces(refreshed) }
+    }
+
+    private func persistWorkspaces(_ records: [SavedWorkspace]? = nil) {
+        let list = records ?? savedWorkspaces.map {
+            SavedWorkspace(id: $0.id, name: $0.name, bookmark: $0.bookmark)
+        }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: Self.savedWorkspacesKey)
+        }
+    }
+
+    /// 恢复上次活跃的工作区；若其 bookmark 已失效则回退本地并提示。
+    private func restoreActiveWorkspace() {
+        guard let idString = UserDefaults.standard.string(forKey: Self.activeWorkspaceKey),
+              let id = UUID(uuidString: idString) else { return }
+        if let ws = savedWorkspaces.first(where: { $0.id == id }) {
+            activateWorkspace(url: ws.url, name: ws.name, id: ws.id, persist: false)
+        } else {
+            // 上次的工作区已失效（文件夹被移动/删除）：回退本地并提示
+            UserDefaults.standard.removeObject(forKey: Self.activeWorkspaceKey)
+            alertMessage = NSLocalizedString("工作区不可用，已切回本地文件", comment: "Workspace unavailable fallback")
+        }
+    }
+
+    /// 切换工作区：保存并关闭全部文档，重建文件树。
+    private func activateWorkspace(url: URL, name: String, id: UUID?, persist: Bool = true) {
+        saveAll()
+        openDocuments.removeAll()
+        selectedDocument = nil
+        rootItem = FileItem(url: url, isDirectory: true)
         refresh(item: rootItem)
+        workspaceName = name
+        activeWorkspaceId = id
+        if persist {
+            if let id {
+                UserDefaults.standard.set(id.uuidString, forKey: Self.activeWorkspaceKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.activeWorkspaceKey)
+            }
+        }
+        treeDidChange()
+    }
+
+    func openLocalWorkspace() {
+        guard !isLocalWorkspace else { return }
+        activateWorkspace(url: rootURL, name: localWorkspaceName, id: nil)
+    }
+
+    func openWorkspace(_ ws: ResolvedWorkspace) {
+        guard activeWorkspaceId != ws.id else { return }
+        activateWorkspace(url: ws.url, name: ws.name, id: ws.id)
+    }
+
+    /// 从文件夹选择器添加并打开工作区（就地引用，不拷贝）。
+    func addWorkspace(from url: URL) {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+              isDir.boolValue else { return }
+        guard let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                   includingResourceValuesForKeys: nil,
+                                                   relativeTo: nil) else { return }
+        var stale = false
+        guard let resolved = try? URL(resolvingBookmarkData: bookmark,
+                                      options: .withSecurityScope,
+                                      bookmarkDataIsStale: &stale) else { return }
+        let path = resolved.standardized.path
+        if path == rootURL.standardized.path {
+            openLocalWorkspace()
+            return
+        }
+        if let existing = savedWorkspaces.first(where: { $0.url.standardized.path == path }) {
+            openWorkspace(existing) // 去重：已在列表中则直接切换
+            return
+        }
+        guard resolved.startAccessingSecurityScopedResource() else { return }
+        let record = SavedWorkspace(id: UUID(), name: resolved.lastPathComponent, bookmark: bookmark)
+        let ws = ResolvedWorkspace(id: record.id, name: record.name, bookmark: bookmark, url: resolved)
+        savedWorkspaces.append(ws)
+        persistWorkspaces()
+        openWorkspace(ws)
+    }
+
+    /// 移除工作区引用（原文件夹及其文件不受影响），若是当前工作区则切回本地。
+    func removeWorkspace(_ ws: ResolvedWorkspace) {
+        ws.url.stopAccessingSecurityScopedResource()
+        savedWorkspaces.removeAll { $0.id == ws.id }
+        persistWorkspaces()
+        if activeWorkspaceId == ws.id {
+            activateWorkspace(url: rootURL, name: localWorkspaceName, id: nil)
+        } else {
+            treeDidChange()
+        }
+    }
+
+    /// 树结构变化后显式通知：FileItem.children 的 @Published 没有视图直接观察，
+    /// 仅靠 selectedDocument/openDocuments 的连带刷新会漏掉新建文件夹这类操作。
+    private func treeDidChange() {
+        objectWillChange.send()
     }
 
     // MARK: - 自动保存
@@ -260,6 +427,8 @@ final class WorkspaceStore: ObservableObject {
     // MARK: - 首次启动
 
     private func seedWelcomeIfNeeded() {
+        // 仅本地工作区播种样例文件
+        guard isLocalWorkspace else { return }
         let flagKey = "codeedit.didSeedWelcome"
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
         UserDefaults.standard.set(true, forKey: flagKey)

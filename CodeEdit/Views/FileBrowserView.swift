@@ -1,14 +1,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 左侧文件浏览器：树形文件列表，新建/重命名/删除/导入/分享。
+/// 左侧文件浏览器：工作区（整个文件夹）的树形列表，新建/重命名/删除/分享。
+/// CodeEdit 桌面版理念：没有“导入”，只有“打开文件夹”——整个文件夹就是工作区，就地编辑。
 /// 在 iPhone 抽屉里使用时，通过 onOpenFile 在打开文件后收回抽屉。
 struct FileBrowserView: View {
     @ObservedObject var workspace: WorkspaceStore
     var onOpenFile: (() -> Void)? = nil
 
-    @State private var showImporter = false
-    @State private var importTarget: FileItem?
+    @State private var showWorkspacePicker = false
     @State private var namePrompt: NamePrompt?
     @State private var deleteItem: FileItem?
     @State private var showDeleteConfirm = false
@@ -23,8 +23,45 @@ struct FileBrowserView: View {
                 .contextMenu { contextMenu(for: item) }
         }
         .listStyle(.sidebar)
-        .navigationTitle(Text("文件"))
+        .navigationTitle(Text(workspace.workspaceName))
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Menu {
+                    Button {
+                        workspace.openLocalWorkspace()
+                    } label: {
+                        Label("本地文件", systemImage: workspace.isLocalWorkspace ? "checkmark" : "iphone")
+                    }
+                    if !workspace.savedWorkspaces.isEmpty {
+                        Divider()
+                    }
+                    ForEach(workspace.savedWorkspaces) { ws in
+                        Button {
+                            workspace.openWorkspace(ws)
+                        } label: {
+                            Label(ws.name, systemImage: workspace.activeWorkspaceId == ws.id ? "checkmark" : "folder")
+                        }
+                    }
+                    Divider()
+                    Button {
+                        showWorkspacePicker = true
+                    } label: {
+                        Label("打开文件夹…", systemImage: "folder.badge.plus")
+                    }
+                    if !workspace.isLocalWorkspace {
+                        Button(role: .destructive) {
+                            if let id = workspace.activeWorkspaceId,
+                               let ws = workspace.savedWorkspaces.first(where: { $0.id == id }) {
+                                workspace.removeWorkspace(ws)
+                            }
+                        } label: {
+                            Label("移除此工作区", systemImage: "folder.badge.minus")
+                        }
+                    }
+                } label: {
+                    Label("切换工作区", systemImage: "folder")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
@@ -50,12 +87,6 @@ struct FileBrowserView: View {
                         }
                     } label: {
                         Label("新建文件夹", systemImage: "folder.badge.plus")
-                    }
-                    Button {
-                        importTarget = nil
-                        showImporter = true
-                    } label: {
-                        Label("导入", systemImage: "square.and.arrow.down")
                     }
                 } label: {
                     Label("新建", systemImage: "plus")
@@ -85,19 +116,17 @@ struct FileBrowserView: View {
             ActivityView(url: item.url)
         }
         .fileImporter(
-            isPresented: $showImporter,
-            // .folder 显式声明后，系统文件选择器允许直接选中整个目录导入；
-            // copyItem 本就递归拷贝目录，refresh 也递归重建树。
-            allowedContentTypes: [.item, .folder],
-            allowsMultipleSelection: true
+            isPresented: $showWorkspacePicker,
+            // 打开文件夹：整个文件夹成为工作区，就地编辑，不拷贝
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
-                workspace.importFiles(urls, to: importTarget ?? workspace.rootItem)
+                if let url = urls.first { workspace.addWorkspace(from: url) }
             case .failure:
                 break
             }
-            importTarget = nil
         }
         .alert(
             Text("提示"),
@@ -189,12 +218,6 @@ struct FileBrowserView: View {
                 }
             } label: {
                 Label("新建文件夹", systemImage: "folder.badge.plus")
-            }
-            Button {
-                importTarget = item
-                showImporter = true
-            } label: {
-                Label("导入到此文件夹", systemImage: "square.and.arrow.down")
             }
             Divider()
         } else {

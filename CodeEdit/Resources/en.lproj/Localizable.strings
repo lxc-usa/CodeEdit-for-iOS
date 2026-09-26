@@ -8,8 +8,6 @@
 "新建" = "New";
 "新建文件" = "New File";
 "新建文件夹" = "New Folder";
-"导入" = "Import";
-"导入到此文件夹" = "Import to This Folder";
 "重命名" = "Rename";
 "删除" = "Delete";
 "分享" = "Share";
@@ -37,4 +35,10 @@
 "无法读取文件" = "Cannot read file";
 "纯文本" = "Plain Text";
 "未命名.txt" = "Untitled.txt";
-"欢迎页内容" = "# Welcome to CodeEdit\n\nA lightweight code editor for iPhone and iPad.\n\n## Features\n\n- Syntax highlighting for 22 languages including Swift, Python and JavaScript\n- Multi-tab editing with auto-save\n- 6 official CodeEdit themes, switchable in Settings\n- File management: create, rename, delete, import\n- System find panel and a code symbol shortcut bar\n\n## Try it\n\nTap the + button on the top left to create a .swift file and start coding!\n\n> Tip: you can also access your documents directly from the Files app.\n";
+"欢迎页内容" = "# Welcome to CodeEdit\n\nA lightweight code editor for iPhone and iPad.\n\n## Features\n\n- Syntax highlighting for 22 languages including Swift, Python and JavaScript\n- Multi-tab editing with auto-save\n- 6 official CodeEdit themes, switchable in Settings\n- File management: create, rename, delete\n- System find panel and a code symbol shortcut bar\n\n## Try it\n\nTap the + button on the top left to create a .swift file and start coding!\n\nYou can also open a folder as a workspace and edit its files in place — nothing is copied.\n\n> Tip: you can also access your documents directly from the Files app.\n";
+
+"本地文件" = "Local Files";
+"打开文件夹…" = "Open Folder…";
+"移除此工作区" = "Remove This Workspace";
+"切换工作区" = "Switch Workspace";
+"工作区不可用，已切回本地文件" = "Workspace unavailable, switched back to Local Files";
