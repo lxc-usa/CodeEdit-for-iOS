@@ -12,8 +12,14 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showDrawer = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    /// 非 nil 时全屏打开该服务器的远程终端。
-    @State private var terminalServer: ServerConfig?
+
+    /// iPhone 导航栏标题：终端标签选中时显示服务器名。
+    private var navigationTitle: String {
+        if let term = workspace.selectedTerminal {
+            return servers.server(id: term.serverID)?.name ?? term.title
+        }
+        return workspace.selectedDocument?.displayName ?? "CodeEdit"
+    }
 
     var body: some View {
         if sizeClass == .compact {
@@ -29,7 +35,7 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             FileBrowserView(workspace: workspace, servers: servers, onOpenTerminal: openTerminal)
         } detail: {
-            EditorAreaView(workspace: workspace, settings: settings)
+            EditorAreaView(workspace: workspace, settings: settings, servers: servers)
                 .navigationBarTitleDisplayMode(.inline)
         }
         .toolbar {
@@ -44,17 +50,14 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: settings)
         }
-        .fullScreenCover(item: $terminalServer) { server in
-            terminalCover(server: server)
-        }
     }
 
     // MARK: - iPhone：编辑器 + 文件抽屉
 
     private var compactLayout: some View {
         NavigationStack {
-            EditorAreaView(workspace: workspace, settings: settings)
-                .navigationTitle(workspace.selectedDocument?.displayName ?? "CodeEdit")
+            EditorAreaView(workspace: workspace, settings: settings, servers: servers)
+                .navigationTitle(navigationTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
@@ -99,31 +102,11 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: settings)
         }
-        .fullScreenCover(item: $terminalServer) { server in
-            terminalCover(server: server)
-        }
     }
 
-    // MARK: - 远程终端
+    // MARK: - 远程终端（作为标签页在主界面打开）
 
     private func openTerminal(serverID: UUID) {
-        guard let server = servers.server(id: serverID) else { return }
-        terminalServer = server
-    }
-
-    @ViewBuilder
-    private func terminalCover(server: ServerConfig) -> some View {
-        NavigationStack {
-            TerminalView(serverID: server.id, initialPath: nil, servers: servers, settings: settings)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button {
-                            terminalServer = nil
-                        } label: {
-                            Label("关闭", systemImage: "xmark")
-                        }
-                    }
-                }
-        }
+        workspace.openTerminal(serverID: serverID)
     }
 }

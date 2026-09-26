@@ -6,13 +6,16 @@ import SwiftTerm
 /// - 打开即进入远端 login shell，cd/环境变量等状态保留，可 apt/yum 安装程序
 /// - 支持 top/htop/vi 等全屏程序（ANSI 转义、备用屏幕、光标定位由 SwiftTerm 仿真）
 /// - 键盘上方自带 Esc/Ctrl/方向键/Tab 快捷栏（SwiftTerm TerminalAccessory）
-/// - 离开页面时会话结束（发送 exit）
+/// - 作为标签页显示在主界面编辑区；切到终端标签时自动聚焦（弹出终端键盘），
+///   切走时让出焦点；关闭标签时按"会话保持"设置结束或挂起会话
 @MainActor
 struct TerminalView: View {
     let serverID: UUID
     /// 从 SFTP 页点终端图标进入时，打开后自动 cd 到的远端路径；nil 表示不 cd。
     /// 仅新会话生效；复用保持中的会话时不执行（保持"继续之前状态"的语义）。
     let initialPath: String?
+    /// 是否为当前选中的标签；切标签时驱动键盘聚焦/让出。
+    let isActive: Bool
     @ObservedObject var servers: ServerStore
     @ObservedObject var settings: SettingsStore
     @Environment(\.colorScheme) private var colorScheme
@@ -20,9 +23,10 @@ struct TerminalView: View {
     /// 会话来自 TerminalSessionCache（按服务器保留），"会话保持"打开时可复用。
     @StateObject private var shell: InteractiveShell
 
-    init(serverID: UUID, initialPath: String?, servers: ServerStore, settings: SettingsStore) {
+    init(serverID: UUID, initialPath: String?, servers: ServerStore, settings: SettingsStore, isActive: Bool = true) {
         self.serverID = serverID
         self.initialPath = initialPath
+        self.isActive = isActive
         self.servers = servers
         self.settings = settings
         _shell = StateObject(wrappedValue: TerminalSessionCache.shared.shell(for: serverID))
@@ -40,7 +44,7 @@ struct TerminalView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .connected:
-                TerminalHostView(shell: shell, settings: settings, colorScheme: colorScheme)
+                TerminalHostView(shell: shell, settings: settings, colorScheme: colorScheme, isActive: isActive)
             case .failed(let message):
                 EmptyState(
                     icon: "wifi.exclamationmark",
@@ -63,6 +67,7 @@ struct TerminalView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: connect)
         .onDisappear {
+            // 标签关闭时才到这里（切标签只是隐藏，视图不卸载，会话继续跑）。
             if settings.terminalResumeSession {
                 // 会话保持：只与视图解绑，会话在后台继续（输出暂存，重进时补上）
                 shell.detach()
@@ -120,6 +125,8 @@ private struct TerminalHostView: UIViewRepresentable {
     @ObservedObject var shell: InteractiveShell
     var settings: SettingsStore
     var colorScheme: ColorScheme
+    /// 当前标签是否被选中：选中时抢键盘焦点（弹出终端键盘），切走时让出。
+    var isActive: Bool
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
@@ -141,9 +148,11 @@ private struct TerminalHostView: UIViewRepresentable {
         shell.onData = { bytes in
             tv.feed(byteArray: ArraySlice(bytes))
         }
-        // 打开即聚焦，可直接打字
-        DispatchQueue.main.async {
-            tv.becomeFirstResponder()
+        // 打开即聚焦，可直接打字（标签页场景下由 updateUIView 按 isActive 管理）
+        if isActive {
+            DispatchQueue.main.async {
+                tv.becomeFirstResponder()
+            }
         }
         return tv
     }
@@ -154,6 +163,17 @@ private struct TerminalHostView: UIViewRepresentable {
             tv.font = want
         }
         applyAppearance(to: tv)
+        // 标签切换时切换键盘：选中终端 → 弹出终端键盘（含 Esc/Ctrl 快捷栏）；
+        // 切到文件标签 → 让出焦点，键盘收回（文件编辑器被点时再按需弹出）。
+        if isActive {
+            if !tv.isFirstResponder {
+                DispatchQueue.main.async {
+                    tv.becomeFirstResponder()
+                }
+            }
+        } else if tv.isFirstResponder {
+            tv.resignFirstResponder()
+        }
     }
 
     private func terminalUIFont() -> UIFont {

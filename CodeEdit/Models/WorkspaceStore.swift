@@ -11,7 +11,11 @@ final class WorkspaceStore: ObservableObject {
     @Published var rootItem: FileItem
     @Published var openDocuments: [EditorDocument] = []
     @Published var selectedDocument: EditorDocument?
-    /// 非空时由界面弹出提示框。
+    /// 打开的终端标签（一台服务器最多一个标签，会话由 TerminalSessionCache 按 serverID 持有）。
+    @Published var openTerminals: [TerminalTab] = []
+    @Published var selectedTerminal: TerminalTab?
+    /// 服务器仓库（CodeEditApp 注入，供终端标签取服务器名）。
+    var servers: ServerStore?    /// 非空时由界面弹出提示框。
     @Published var alertMessage: String?
 
     private var saveWorkItems: [String: DispatchWorkItem] = [:]
@@ -133,14 +137,14 @@ final class WorkspaceStore: ObservableObject {
 
     // MARK: - 打开 / 关闭
 
-    func open(_ item: FileItem) {
+    func open(_ item: FileItem, select: Bool = true) {
         guard !item.isDirectory, !item.isLoadingPlaceholder else { return }
         if let doc = openDocuments.first(where: { $0.url == item.url }) {
-            selectedDocument = doc
+            if select { selectDocument(doc) }
             return
         }
         if let fs = remoteFS {
-            Task { await openRemote(item, fs: fs) }
+            Task { await openRemote(item, fs: fs, select: select) }
             return
         }
         do {
@@ -156,7 +160,7 @@ final class WorkspaceStore: ObservableObject {
             let text = String(data: data, encoding: .utf8) ?? ""
             let doc = EditorDocument(url: item.url, text: text)
             openDocuments.append(doc)
-            selectedDocument = doc
+            if select { selectDocument(doc) }
         } catch {
             alertMessage = NSLocalizedString("无法读取文件", comment: "Cannot read file alert")
         }
@@ -168,9 +172,9 @@ final class WorkspaceStore: ObservableObject {
         openDocuments.remove(at: idx)
         if selectedDocument === doc {
             if openDocuments.isEmpty {
-                selectedDocument = nil
+                selectDocument(nil)
             } else {
-                selectedDocument = openDocuments[min(idx, openDocuments.count - 1)]
+                selectDocument(openDocuments[min(idx, openDocuments.count - 1)])
             }
         }
         // 先从标签页摘掉（UI 即时响应），保存放后台：远程保存是网络 I/O，必须 await
@@ -178,6 +182,57 @@ final class WorkspaceStore: ObservableObject {
             Task { await doc.saveAndWait() }
         } else {
             doc.save()
+        }
+    }
+
+    // MARK: - 标签选择（文档 / 终端互斥）
+
+    /// 选中文档标签；传入非 nil 时同时取消终端选中。
+    func selectDocument(_ doc: EditorDocument?) {
+        selectedDocument = doc
+        if doc != nil { selectedTerminal = nil }
+    }
+
+    /// 选中终端标签；传入非 nil 时同时取消文档选中。
+    func selectTerminal(_ tab: TerminalTab?) {
+        selectedTerminal = tab
+        if tab != nil { selectedDocument = nil }
+    }
+
+    // MARK: - 终端标签
+
+    /// 打开服务器终端。同一服务器同时只保留一个标签，已打开则直接切过去。
+    /// 终端作为标签页显示在主界面编辑区，与文件标签并列。
+    func openTerminal(serverID: UUID) {
+        if let tab = openTerminals.first(where: { $0.serverID == serverID }) {
+            selectTerminal(tab)
+            return
+        }
+        guard let server = servers?.server(id: serverID) else { return }
+        let tab = TerminalTab(serverID: serverID, title: server.name)
+        openTerminals.append(tab)
+        selectTerminal(tab)
+    }
+
+    /// 关闭终端标签。标签视图的 onDisappear 会按"会话保持"设置停止或挂起会话。
+    func closeTerminal(_ tab: TerminalTab) {
+        guard let idx = openTerminals.firstIndex(where: { $0.id == tab.id }) else { return }
+        let wasSelected = selectedTerminal?.id == tab.id
+        openTerminals.remove(at: idx)
+        if wasSelected {
+            if let next = openTerminals.last {
+                selectTerminal(next)
+            } else {
+                selectedTerminal = nil
+                selectedDocument = openDocuments.last
+            }
+        }
+    }
+
+    /// 关闭某台服务器的全部终端标签（删除服务器时调用）。
+    func closeTerminals(for serverID: UUID) {
+        for tab in openTerminals.filter({ $0.serverID == serverID }) {
+            closeTerminal(tab)
         }
     }
 
@@ -240,8 +295,9 @@ final class WorkspaceStore: ObservableObject {
         let affected = openDocuments.filter {
             $0.url.path == oldPath || $0.url.path.hasPrefix(oldPath + "/")
         }
-        // open() 会改动 selectedDocument，先记下重命名前的选中
+        // open() 会改动选中，先记下重命名前的选中（文档或终端）
         let previouslySelectedURL = selectedDocument?.url
+        let previouslySelectedTerminal = selectedTerminal
         for doc in affected {
             cancelPendingSave(for: doc)
             doc.save()
@@ -253,11 +309,11 @@ final class WorkspaceStore: ObservableObject {
         }
         openDocuments.removeAll { doc in affected.contains { $0 === doc } }
         refresh(item: rootItem)
-        // 按原顺序重开受影响的文档
+        // 按原顺序重开受影响的文档（终端标签选中时不抢焦点）
         for doc in affected {
             let suffix = String(doc.url.path.dropFirst(oldPath.count))
             let reopenURL = URL(fileURLWithPath: newURL.path + suffix)
-            if let newItem = findItem(at: reopenURL) { open(newItem) }
+            if let newItem = findItem(at: reopenURL) { open(newItem, select: previouslySelectedTerminal == nil) }
         }
         // 恢复重命名前的选中（若选中的是被重命名的路径，映射到新路径）
         if let prev = previouslySelectedURL {
@@ -268,9 +324,11 @@ final class WorkspaceStore: ObservableObject {
             } else {
                 mapped = prev
             }
-            selectedDocument = openDocuments.first { $0.url == mapped }
+            selectDocument(openDocuments.first { $0.url == mapped })
+        } else if let term = previouslySelectedTerminal {
+            selectTerminal(term)
         } else {
-            selectedDocument = nil
+            selectDocument(nil)
         }
         treeDidChange()
     }
@@ -287,7 +345,7 @@ final class WorkspaceStore: ObservableObject {
         let selectedWasAffected = affected.contains { $0 === selectedDocument }
         for doc in affected { cancelPendingSave(for: doc) }
         openDocuments.removeAll { doc in affected.contains { $0 === doc } }
-        if selectedWasAffected { selectedDocument = openDocuments.last }
+        if selectedWasAffected { selectDocument(openDocuments.last) }
         do {
             try FileManager.default.removeItem(at: item.url)
         } catch {
@@ -366,7 +424,7 @@ final class WorkspaceStore: ObservableObject {
         disconnectRemote()
         saveAll()
         openDocuments.removeAll()
-        selectedDocument = nil
+        selectDocument(nil) // 终端标签与文件工作区无关，跨工作区保留
         rootItem = FileItem(url: url, isDirectory: true)
         refresh(item: rootItem)
         workspaceName = name
@@ -540,7 +598,7 @@ final class WorkspaceStore: ObservableObject {
                 disconnectRemote()
                 saveAll()
                 openDocuments.removeAll()
-                selectedDocument = nil
+                selectDocument(nil) // 终端标签与文件工作区无关，跨工作区保留
                 remoteFS = fs
                 let url = Self.remoteURL(scheme: fs.urlScheme, serverID: server.id, path: resolved)
                 rootItem = FileItem(url: url, isDirectory: true)
@@ -626,7 +684,7 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    private func openRemote(_ item: FileItem, fs: any RemoteFileSystem) async {
+    private func openRemote(_ item: FileItem, fs: any RemoteFileSystem, select: Bool = true) async {
         do {
             let data = try await fs.read(path: item.url.path)
             guard data.count <= Self.maxOpenableSize else {
@@ -639,13 +697,13 @@ final class WorkspaceStore: ObservableObject {
             }
             // 并发双开保护：等待网络时用户可能又点了一次
             if let existing = openDocuments.first(where: { $0.url == item.url }) {
-                selectedDocument = existing
+                if select { selectDocument(existing) }
                 return
             }
             let doc = EditorDocument(url: item.url, text: String(data: data, encoding: .utf8) ?? "")
             doc.remoteFS = fs
             openDocuments.append(doc)
-            selectedDocument = doc
+            if select { selectDocument(doc) }
         } catch {
             alertMessage = error.localizedDescription
         }
@@ -708,6 +766,7 @@ final class WorkspaceStore: ObservableObject {
                 $0.url.path == oldPath || $0.url.path.hasPrefix(oldPath + "/")
             }
             let previouslySelectedURL = selectedDocument?.url
+            let previouslySelectedTerminal = selectedTerminal
             for doc in affected {
                 cancelPendingSave(for: doc)
                 await doc.saveAndWait()
@@ -721,7 +780,7 @@ final class WorkspaceStore: ObservableObject {
             for doc in affected {
                 let suffix = String(doc.url.path.dropFirst(oldPath.count))
                 let reopenURL = Self.remoteURL(scheme: fs.urlScheme, serverID: sid, path: newPath + suffix)
-                if let newItem = findItem(at: reopenURL) { open(newItem) }
+                if let newItem = findItem(at: reopenURL) { open(newItem, select: previouslySelectedTerminal == nil) }
             }
             if let prev = previouslySelectedURL {
                 let mapped: URL
@@ -731,9 +790,11 @@ final class WorkspaceStore: ObservableObject {
                 } else {
                     mapped = prev
                 }
-                selectedDocument = openDocuments.first { $0.url == mapped }
+                selectDocument(openDocuments.first { $0.url == mapped })
+            } else if let term = previouslySelectedTerminal {
+                selectTerminal(term)
             } else {
-                selectedDocument = nil
+                selectDocument(nil)
             }
             treeDidChange()
         } catch {
@@ -750,7 +811,7 @@ final class WorkspaceStore: ObservableObject {
         let selectedWasAffected = affected.contains { $0 === selectedDocument }
         for doc in affected { cancelPendingSave(for: doc) }
         openDocuments.removeAll { doc in affected.contains { $0 === doc } }
-        if selectedWasAffected { selectedDocument = openDocuments.last }
+        if selectedWasAffected { selectDocument(openDocuments.last) }
         do {
             try await fs.delete(path: path, isDirectory: item.isDirectory)
         } catch {

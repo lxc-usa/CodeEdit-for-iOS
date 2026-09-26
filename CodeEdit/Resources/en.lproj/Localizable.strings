@@ -188,4 +188,4 @@
 "经 SFTP 打开，之后可像本地一样浏览、编辑、保存，直接操作远端文件。" = "Opens over SFTP; browse, edit and save just like local files, operating directly on the remote files.";
 "远程文件夹" = "Remote Folder";
 "远程终端" = "Remote Terminal";
-"连接远程主机终端" = "Connect to Remote Terminal";
+"连接远程终端" = "Connect to Remote Terminal";

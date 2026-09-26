@@ -11,6 +11,7 @@ struct CodeEditApp: App {
         WindowGroup {
             ContentView(workspace: workspace, settings: settings, servers: servers)
                 .onAppear {
+                    workspace.servers = servers
                     // 服务器列表就绪后，恢复上次的远程工作区（若有）
                     workspace.restoreRemoteWorkspaceIfNeeded(servers: servers)
                 }

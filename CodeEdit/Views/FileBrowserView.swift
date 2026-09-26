@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// 远程工作区（SFTP）打开后与本地走同一套 UI 流程：树形浏览、打开编辑、自动保存、
 /// 新建/重命名/删除，经 RemoteFileSystem 直接操作远端。
 /// 在 iPhone 抽屉里使用时，通过 onOpenFile 在打开文件后收回抽屉，
-/// 通过 onOpenTerminal 把"连接远程主机终端"的请求交到 ContentView 全屏打开。
+/// 通过 onOpenTerminal 把"连接远程终端"的请求交到 ContentView，作为标签页在主界面打开。
 struct FileBrowserView: View {
     @ObservedObject var workspace: WorkspaceStore
     @ObservedObject var servers: ServerStore
@@ -175,7 +175,7 @@ struct FileBrowserView: View {
             Button {
                 showTerminalPicker = true
             } label: {
-                Label("连接远程主机终端", systemImage: "terminal")
+                Label("连接远程终端", systemImage: "terminal")
             }
             Button {
                 showServerManager = true
@@ -466,7 +466,7 @@ struct TerminalPickerSheet: View {
                     }
                 }
             }
-            .navigationTitle(Text("连接远程主机终端"))
+            .navigationTitle(Text("连接远程终端"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -545,8 +545,9 @@ struct ServerManagerView: View {
             .confirmationDialog("删除这台服务器？", isPresented: $showDeleteConfirm) {
                 Button("删除", role: .destructive) {
                     if let server = pendingDelete {
-                        // 若当前远程工作区正连着它，先断开回本地
+                        // 若当前远程工作区正连着它，先断开回本地；关掉它的终端标签
                         workspace.disconnectRemoteIfNeeded(serverID: server.id)
+                        workspace.closeTerminals(for: server.id)
                         servers.delete(server)
                     }
                     pendingDelete = nil
