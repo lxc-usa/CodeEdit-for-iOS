@@ -12,9 +12,7 @@ final class SFTPFileSystem: RemoteFileSystem {
     }
 
     func list(path: String) async throws -> [RemoteFileEntry] {
-        try await SSHManager.shared.listDirectory(server: server, path: path).map {
-            RemoteFileEntry(name: $0.name, path: $0.path, isDirectory: $0.isDirectory, size: $0.size)
-        }
+        try await SSHManager.shared.listDirectory(server: server, path: path)
     }
 
     func read(path: String) async throws -> Data {

@@ -318,7 +318,7 @@ actor SSHManager {
 
     // MARK: - SFTP
 
-    func listDirectory(server: ServerConfig, path: String) async throws -> [RemoteEntry] {
+    func listDirectory(server: ServerConfig, path: String) async throws -> [RemoteFileEntry] {
         do {
             return try await listDirectoryInner(server: server, path: path)
         } catch let e as SSHManagerError {
@@ -328,19 +328,19 @@ actor SSHManager {
         }
     }
 
-    private func listDirectoryInner(server: ServerConfig, path: String) async throws -> [RemoteEntry] {
+    private func listDirectoryInner(server: ServerConfig, path: String) async throws -> [RemoteFileEntry] {
         let sftp = try await sftp(for: server)
         // 解析为绝对路径，避免 "./" 前缀在后续读写中累积
         let basePath = try await sftp.getRealPath(atPath: path)
         let listing = try await sftp.listDirectory(atPath: basePath)
-        var entries: [RemoteEntry] = []
+        var entries: [RemoteFileEntry] = []
         for name in listing {
             for component in name.components {
                 guard component.filename != ".", component.filename != ".." else { continue }
                 let mode = component.attributes.permissions ?? 0
                 let isDir = (mode & 0o170000) == 0o040000 || component.longname.hasPrefix("d")
                 let fullPath = basePath == "/" ? "/\(component.filename)" : "\(basePath)/\(component.filename)"
-                entries.append(RemoteEntry(
+                entries.append(RemoteFileEntry(
                     name: component.filename,
                     path: fullPath,
                     isDirectory: isDir,

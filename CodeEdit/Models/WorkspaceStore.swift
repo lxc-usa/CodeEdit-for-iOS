@@ -58,6 +58,8 @@ final class WorkspaceStore: ObservableObject {
     /// 当前工作区 id；nil = 本地 Documents（远程工作区另见 remoteFS）。
     @Published var activeWorkspaceId: UUID?
     var isLocalWorkspace: Bool { activeWorkspaceId == nil && remoteFS == nil }
+    /// 是否远程工作区（FileBrowserView 用）。
+    var isRemoteWorkspace: Bool { remoteFS != nil }
     /// 远程文件系统；非 nil 表示当前是远程工作区（SFTP/WebDAV/…）。
     /// 为保持本地路径零回归，所有文件操作在此分支，本地代码原样不动。
     var remoteFS: (any RemoteFileSystem)?

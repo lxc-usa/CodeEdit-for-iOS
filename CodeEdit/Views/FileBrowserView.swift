@@ -185,7 +185,9 @@ struct FileBrowserView: View {
             if workspace.isRemoteWorkspace {
                 Divider()
                 Button(role: .destructive) {
-                    workspace.disconnectRemote()
+                    // openLocalWorkspace 内部经 activateWorkspace 先断开远程再重建本地树；
+                    // 不能先调 disconnectRemote()，否则 isLocalWorkspace 变 true 会提前返回，
+                    // 根节点还停留在远程树上。
                     workspace.openLocalWorkspace()
                 } label: {
                     Label("断开远程连接", systemImage: "wifi.slash")
