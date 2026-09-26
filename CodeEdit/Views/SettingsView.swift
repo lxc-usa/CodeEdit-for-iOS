@@ -9,8 +9,23 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(ThemeManager.bundled, id: \.file.displayName) { bundled in
-                        themeRow(bundled)
+                    Toggle(isOn: $settings.followSystemTheme) {
+                        Text("跟随系统配色")
+                    }
+                    .onChange(of: settings.followSystemTheme) { _, enabled in
+                        // 打开时沿用当前主题所在的配色方案家族
+                        if enabled {
+                            settings.themeFamily = ThemeManager.familyName(of: settings.themeName)
+                        }
+                    }
+                    if settings.followSystemTheme {
+                        ForEach(ThemeManager.families, id: \.self) { family in
+                            familyRow(family)
+                        }
+                    } else {
+                        ForEach(ThemeManager.bundled, id: \.file.displayName) { bundled in
+                            themeRow(bundled)
+                        }
                     }
                 } header: {
                     Text("主题")
@@ -80,21 +95,7 @@ struct SettingsView: View {
             settings.themeName = bundled.file.displayName
         } label: {
             HStack(spacing: 12) {
-                // 三色预览：背景 / 文字 / 关键字
-                HStack(spacing: -7) {
-                    Circle()
-                        .fill(Color(uiColor: bundled.previewBackground))
-                        .frame(width: 24, height: 24)
-                        .overlay(Circle().stroke(.gray.opacity(0.35), lineWidth: 1))
-                    Circle()
-                        .fill(Color(uiColor: bundled.previewText))
-                        .frame(width: 24, height: 24)
-                        .overlay(Circle().stroke(.gray.opacity(0.35), lineWidth: 1))
-                    Circle()
-                        .fill(Color(uiColor: bundled.previewKeyword))
-                        .frame(width: 24, height: 24)
-                        .overlay(Circle().stroke(.gray.opacity(0.35), lineWidth: 1))
-                }
+                previewCircles(bundled: bundled)
                 Text(bundled.file.displayName)
                     .foregroundStyle(.primary)
                 Spacer()
@@ -106,5 +107,52 @@ struct SettingsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// 跟随系统配色时的配色方案行：深/浅两套三色预览，点选即选中该家族。
+    private func familyRow(_ family: String) -> some View {
+        let isSelected = settings.themeFamily == family
+        return Button {
+            settings.themeFamily = family
+        } label: {
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    ForEach([true, false], id: \.self) { dark in
+                        if let bundled = ThemeManager.bundled.first(where: {
+                            $0.file.displayName == "\(family) (\(dark ? "Dark" : "Light"))"
+                        }) {
+                            previewCircles(bundled: bundled)
+                        }
+                    }
+                }
+                Text(family)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 三色预览：背景 / 文字 / 关键字。
+    private func previewCircles(bundled: BundledTheme) -> some View {
+        HStack(spacing: -7) {
+            Circle()
+                .fill(Color(uiColor: bundled.previewBackground))
+                .frame(width: 24, height: 24)
+                .overlay(Circle().stroke(.gray.opacity(0.35), lineWidth: 1))
+            Circle()
+                .fill(Color(uiColor: bundled.previewText))
+                .frame(width: 24, height: 24)
+                .overlay(Circle().stroke(.gray.opacity(0.35), lineWidth: 1))
+            Circle()
+                .fill(Color(uiColor: bundled.previewKeyword))
+                .frame(width: 24, height: 24)
+                .overlay(Circle().stroke(.gray.opacity(0.35), lineWidth: 1))
+        }
     }
 }

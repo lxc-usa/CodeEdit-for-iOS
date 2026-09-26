@@ -42,3 +42,4 @@
 "移除此工作区" = "Remove This Workspace";
 "切换工作区" = "Switch Workspace";
 "工作区不可用，已切回本地文件" = "Workspace unavailable, switched back to Local Files";
+"跟随系统配色" = "Follow System Appearance";

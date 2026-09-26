@@ -6,6 +6,14 @@ final class SettingsStore: ObservableObject {
     @Published var themeName: String {
         didSet { UserDefaults.standard.set(themeName, forKey: "codeedit.themeName") }
     }
+    /// 跟随系统配色：同一配色方案家族内按系统深浅自动切换。
+    @Published var followSystemTheme: Bool {
+        didSet { UserDefaults.standard.set(followSystemTheme, forKey: "codeedit.followSystemTheme") }
+    }
+    /// 跟随系统配色时选中的配色方案家族（如 "Default"）。
+    @Published var themeFamily: String {
+        didSet { UserDefaults.standard.set(themeFamily, forKey: "codeedit.themeFamily") }
+    }
     @Published var fontSize: Double {
         didSet { UserDefaults.standard.set(fontSize, forKey: "codeedit.fontSize") }
     }
@@ -25,6 +33,8 @@ final class SettingsStore: ObservableObject {
     init() {
         let defaults = UserDefaults.standard
         themeName = defaults.string(forKey: "codeedit.themeName") ?? "Default (Dark)"
+        followSystemTheme = defaults.object(forKey: "codeedit.followSystemTheme") as? Bool ?? false
+        themeFamily = defaults.string(forKey: "codeedit.themeFamily") ?? "Default"
         let savedFontSize = defaults.double(forKey: "codeedit.fontSize")
         fontSize = savedFontSize > 0 ? savedFontSize : 14
         showLineNumbers = defaults.object(forKey: "codeedit.showLineNumbers") as? Bool ?? true

@@ -5,10 +5,17 @@ struct EditorAreaView: View {
     @ObservedObject var workspace: WorkspaceStore
     @ObservedObject var settings: SettingsStore
     @StateObject private var findController = FindController()
+    @Environment(\.colorScheme) private var colorScheme
 
-    /// 当前主题（字号/主题名变化时重建，CETheme 构造只是颜色组装，开销可忽略）。
+    /// 当前主题（字号/主题名/系统配色变化时重建，CETheme 构造只是颜色组装，开销可忽略）。
     private var theme: CETheme {
-        ThemeManager.makeTheme(named: settings.themeName, fontSize: settings.fontSize)
+        let name = ThemeManager.effectiveDisplayName(
+            followSystem: settings.followSystemTheme,
+            family: settings.themeFamily,
+            fallbackName: settings.themeName,
+            systemDark: colorScheme == .dark
+        )
+        return ThemeManager.makeTheme(named: name, fontSize: settings.fontSize)
     }
 
     var body: some View {
@@ -45,16 +52,38 @@ struct EditorAreaView: View {
     // MARK: - 标签页条
 
     private var tabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
-                ForEach(workspace.openDocuments) { doc in
-                    DocTab(doc: doc, workspace: workspace)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(workspace.openDocuments) { doc in
+                        DocTab(doc: doc, workspace: workspace)
+                            .id(doc.id)
+                    }
                 }
+                .padding(.horizontal, 6)
             }
-            .padding(.horizontal, 6)
+            .frame(height: 38)
+            .background(.bar)
+            .onAppear {
+                scrollToSelectedSoon(proxy, animated: false)
+            }
+            .onChange(of: workspace.selectedDocument?.id) { _, _ in
+                scrollToSelectedSoon(proxy, animated: true)
+            }
         }
-        .frame(height: 38)
-        .background(.bar)
+    }
+
+    /// 保证当前文件的标签始终处在可见区域（同 openCoder 的处理）。
+    /// 用 Task 跳一拍：刚打开文件时新标签还没完成布局，直接 scrollTo 会滚不到。
+    private func scrollToSelectedSoon(_ proxy: ScrollViewProxy, animated: Bool) {
+        Task {
+            guard let id = workspace.selectedDocument?.id else { return }
+            if animated {
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
+            } else {
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
     }
 }
 

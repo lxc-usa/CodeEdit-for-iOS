@@ -27,6 +27,37 @@ enum ThemeManager {
         makeTheme(file(named: displayName), fontSize: fontSize)
     }
 
+    // MARK: - 跟随系统配色
+
+    /// 配色方案家族："Default (Dark)" -> "Default"。
+    static func familyName(of displayName: String) -> String {
+        for suffix in [" (Dark)", " (Light)"] {
+            if let range = displayName.range(of: suffix),
+               range.upperBound == displayName.endIndex {
+                return String(displayName[..<range.lowerBound])
+            }
+        }
+        return displayName
+    }
+
+    /// 去重后的家族列表（bundled 顺序）。
+    static var families: [String] {
+        var seen: [String] = []
+        for b in bundled {
+            let f = familyName(of: b.file.displayName)
+            if !seen.contains(f) { seen.append(f) }
+        }
+        return seen
+    }
+
+    /// 跟随系统配色时，同一家族内按系统深浅选主题；找不到对应变体则回退 fallbackName。
+    static func effectiveDisplayName(followSystem: Bool, family: String,
+                                     fallbackName: String, systemDark: Bool) -> String {
+        guard followSystem else { return fallbackName }
+        let candidate = "\(family) (\(systemDark ? "Dark" : "Light"))"
+        return bundled.contains { $0.file.displayName == candidate } ? candidate : fallbackName
+    }
+
     static func makeTheme(_ file: CEThemeFile, fontSize: CGFloat) -> CETheme {
         var colors: [String: (color: UIColor, bold: Bool)] = [:]
         for (key, entry) in file.editor {
