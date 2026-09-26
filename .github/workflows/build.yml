@@ -1,0 +1,97 @@
+name: Build iOS unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Verify Info.plist survived XcodeGen
+        run: |
+          set -euo pipefail
+          # XcodeGen 会覆盖 info.path 指向的源文件：成品必须带 UILaunchScreen，
+          # 否则真机会进入旧比例兼容模式（上下黑边）。这里直接断言源文件。
+          python3 - <<'EOF'
+          import plistlib, sys
+          with open('CodeEdit/Info.plist', 'rb') as f:
+              info = plistlib.load(f)
+          missing = [k for k in ('UILaunchScreen', 'CFBundleDisplayName',
+                                 'UISupportedInterfaceOrientations') if k not in info]
+          if missing:
+              print(f'Info.plist 缺少键: {missing}')
+              sys.exit(1)
+          print('Info.plist OK:', sorted(info.keys()))
+          EOF
+
+      - name: Verify bundled themes
+        run: |
+          set -euo pipefail
+          count=$(ls Themes/*.cetheme | wc -l)
+          echo "Bundled themes: $count"
+          test "$count" -ge 4
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -skipPackagePluginValidation \
+            -project CodeEdit.xcodeproj \
+            -scheme CodeEdit
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project CodeEdit.xcodeproj \
+            -skipPackagePluginValidation \
+            -scheme CodeEdit \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          echo "App: $APP_PATH"
+          test -n "$APP_PATH"
+          # 断言成品 Info.plist：没有 UILaunchScreen 真机会黑边
+          python3 - "$APP_PATH" <<'EOF'
+          import plistlib, sys
+          with open(f'{sys.argv[1]}/Info.plist', 'rb') as f:
+              info = plistlib.load(f)
+          if 'UILaunchScreen' not in info:
+              print('成品 Info.plist 缺少 UILaunchScreen')
+              sys.exit(1)
+          print('成品 Info.plist OK, UILaunchScreen =', info['UILaunchScreen'])
+          EOF
+          # 断言主题文件打进包了
+          THEME_COUNT="$(ls "$APP_PATH"/*.cetheme 2>/dev/null | wc -l)"
+          echo "Themes in bundle: $THEME_COUNT"
+          test "$THEME_COUNT" -ge 4
+          rm -rf Payload CodeEdit-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry CodeEdit-unsigned.ipa Payload
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeEdit-iOS-unsigned-ipa
+          path: CodeEdit-unsigned.ipa
+          if-no-files-found: error
