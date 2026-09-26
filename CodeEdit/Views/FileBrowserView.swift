@@ -36,7 +36,7 @@ struct FileBrowserView: View {
                             workspace.createFile(name: name, in: workspace.rootItem)
                         }
                     } label: {
-                        Label(Text("新建文件"), systemImage: "doc.badge.plus")
+                        Label("新建文件", systemImage: "doc.badge.plus")
                     }
                     Button {
                         namePrompt = NamePrompt(
@@ -48,16 +48,16 @@ struct FileBrowserView: View {
                             workspace.createFolder(name: name, in: workspace.rootItem)
                         }
                     } label: {
-                        Label(Text("新建文件夹"), systemImage: "folder.badge.plus")
+                        Label("新建文件夹", systemImage: "folder.badge.plus")
                     }
                     Button {
                         importTarget = nil
                         showImporter = true
                     } label: {
-                        Label(Text("导入"), systemImage: "square.and.arrow.down")
+                        Label("导入", systemImage: "square.and.arrow.down")
                     }
                 } label: {
-                    Label(Text("新建"), systemImage: "plus")
+                    Label("新建", systemImage: "plus")
                 }
             }
         }
@@ -155,7 +155,7 @@ struct FileBrowserView: View {
                     workspace.createFile(name: name, in: item)
                 }
             } label: {
-                Label(Text("新建文件"), systemImage: "doc.badge.plus")
+                Label("新建文件", systemImage: "doc.badge.plus")
             }
             Button {
                 namePrompt = NamePrompt(
@@ -167,20 +167,20 @@ struct FileBrowserView: View {
                     workspace.createFolder(name: name, in: item)
                 }
             } label: {
-                Label(Text("新建文件夹"), systemImage: "folder.badge.plus")
+                Label("新建文件夹", systemImage: "folder.badge.plus")
             }
             Button {
                 importTarget = item
                 showImporter = true
             } label: {
-                Label(Text("导入到此文件夹"), systemImage: "square.and.arrow.down")
+                Label("导入到此文件夹", systemImage: "square.and.arrow.down")
             }
             Divider()
         } else {
             Button {
                 shareItem = ShareItem(url: item.url)
             } label: {
-                Label(Text("分享"), systemImage: "square.and.arrow.up")
+                Label("分享", systemImage: "square.and.arrow.up")
             }
             Divider()
         }
@@ -194,13 +194,13 @@ struct FileBrowserView: View {
                 workspace.rename(item: item, newName: name)
             }
         } label: {
-            Label(Text("重命名"), systemImage: "pencil")
+            Label("重命名", systemImage: "pencil")
         }
         Button(role: .destructive) {
             deleteItem = item
             showDeleteConfirm = true
         } label: {
-            Label(Text("删除"), systemImage: "trash")
+            Label("删除", systemImage: "trash")
         }
     }
 

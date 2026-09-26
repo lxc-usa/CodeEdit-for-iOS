@@ -19,7 +19,7 @@ struct ContentView: View {
                 Button {
                     showSettings = true
                 } label: {
-                    Label(Text("设置"), systemImage: "gear")
+                    Label("设置", systemImage: "gear")
                 }
             }
         }

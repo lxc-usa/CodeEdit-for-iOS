@@ -35,7 +35,7 @@ struct EditorAreaView: View {
                 Button {
                     findController.presentFind()
                 } label: {
-                    Label(Text("查找"), systemImage: "magnifyingglass")
+                    Label("查找", systemImage: "magnifyingglass")
                 }
                 .disabled(workspace.selectedDocument == nil)
             }
@@ -117,7 +117,7 @@ private struct WelcomeView: View {
                         in: workspace.rootItem
                     )
                 } label: {
-                    Label(Text("新建文件"), systemImage: "doc.badge.plus")
+                    Label("新建文件", systemImage: "doc.badge.plus")
                 }
                 .buttonStyle(.borderedProminent)
             }

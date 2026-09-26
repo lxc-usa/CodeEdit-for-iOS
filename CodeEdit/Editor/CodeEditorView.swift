@@ -161,7 +161,10 @@ struct CodeEditorView: UIViewRepresentable {
         func textViewDidChange(_ textView: TextView) {
             guard !suppressChanges else { return }
             parent.document.text = textView.text
-            parent.workspace.documentDidChange(parent.document)
+            // UIKit 保证 delegate 回调在主线程，同步跳回 @MainActor 的 WorkspaceStore。
+            MainActor.assumeIsolated {
+                parent.workspace.documentDidChange(parent.document)
+            }
         }
 
         // MARK: - 符号快捷栏
