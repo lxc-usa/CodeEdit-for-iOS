@@ -87,6 +87,7 @@ targets:
           - TreeSitterTOMLRunestone
           - TreeSitterMarkdownRunestone
           - TreeSitterSQLRunestone
+          - TreeSitterLuaRunestone
 
 schemes:
   CodeEdit:
