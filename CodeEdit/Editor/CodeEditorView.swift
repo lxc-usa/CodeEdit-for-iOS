@@ -143,7 +143,8 @@ struct CodeEditorView: UIViewRepresentable {
         /// 顶部栏自动显隐：KVO 观察 contentOffset
         ///（Runestone 的 TextViewDelegate 没有滚动回调）。
         var scrollObservation: NSKeyValueObservation?
-        private var topBarTracker: TopBarScrollTracker?
+        /// makeUIView 里创建（Coordinator 外部需要访问，不能 private）
+        var topBarTracker: TopBarScrollTracker?
 
         init(_ parent: CodeEditorView) {
             self.parent = parent

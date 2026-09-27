@@ -252,7 +252,8 @@ private struct TerminalHostView: UIViewRepresentable {
         _ = TerminalKeyboardToggleSwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
-        tv.terminalDelegate = context.coordinator
+        let coordinator = context.coordinator
+        tv.terminalDelegate = coordinator
         // Coordinator 是非隔离的（SwiftTerm 的 delegate 方法都是非隔离要求），
         // 只做转发；真正调 @MainActor 的 shell 的部分 hop 到 MainActor。
         // 外层闭包是非 Sendable 的，捕获 weak shell 合法；内层 Task 与 shell
