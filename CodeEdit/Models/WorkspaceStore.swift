@@ -625,7 +625,9 @@ final class WorkspaceStore: ObservableObject {
                 let resolved = trimmed.isEmpty
                     ? try await fs.homeDirectory()
                     : try await SSHManager.shared.realPath(server: server, path: trimmed)
-                disconnectRemote()
+                // 先 await 旧通道丢弃，再建新工作区：同一服务器切工作区时
+                // detached 的 drop 会和新工作区的首次列表 racing 误杀通道
+                await disconnectRemoteAndWait()
                 saveAll()
                 openDocuments.removeAll()
                 selectDocument(nil) // 终端标签与文件工作区无关，跨工作区保留
@@ -713,6 +715,19 @@ final class WorkspaceStore: ObservableObject {
         remoteFS = nil
         if let sftp = fs as? SFTPFileSystem {
             Task { await sftp.disconnect() }
+        }
+    }
+
+    /// 断开远程文件连接（async 版）：await 旧 SFTP 通道的丢弃再返回。
+    ///
+    /// openRemoteWorkspace 必须用这个而不是 disconnectRemote()：
+    /// 同一服务器切工作区时，旧通道的 drop 若与新工作区的首次列表并发，
+    /// 会把新列表正在用的通道提前关掉（NIOCore.ChannelError）。
+    func disconnectRemoteAndWait() async {
+        guard let fs = remoteFS else { return }
+        remoteFS = nil
+        if let sftp = fs as? SFTPFileSystem {
+            await sftp.disconnect()
         }
     }
 

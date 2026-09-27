@@ -198,3 +198,6 @@
 "服务器已删除" = "Server Deleted";
 "管理服务器" = "Manage Servers";
 "远程" = "Remote";
+"SFTP 通道已关闭，请重试" = "SFTP channel closed, please try again";
+"服务器关闭了 SFTP 通道，请重试" = "Server closed the SFTP channel, please try again";
+"SFTP 通道错误（%@）" = "SFTP channel error (%@)";

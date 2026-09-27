@@ -116,6 +116,18 @@ func describeSSHError(_ error: Error) -> String {
             return String(format: NSLocalizedString("SFTP 错误（%@）", comment: ""), String(describing: e))
         }
     }
+    if let e = error as? ChannelError {
+        // 通道在使用中途被关闭（并发丢弃、对端关闭、网络抖动）。
+        // 正常已被 withSFTP 的重试消化，走到这里说明重试也失败了。
+        switch e {
+        case .ioOnClosedChannel, .alreadyClosed, .closedRemotely:
+            return String(localized: "SFTP 通道已关闭，请重试")
+        case .remotePeerClosed:
+            return String(localized: "服务器关闭了 SFTP 通道，请重试")
+        default:
+            return String(format: NSLocalizedString("SFTP 通道错误（%@）", comment: ""), String(describing: e))
+        }
+    }
     return error.localizedDescription
 }
 
@@ -230,6 +242,46 @@ actor SSHManager {
         }
     }
 
+    // MARK: - SFTP 通道容错
+
+    /// 通道已死的错误：并发 drop / 对端关闭 / 网络抖动导致通道不可用。
+    private func isDeadChannelError(_ error: Error) -> Bool {
+        guard let e = error as? ChannelError else { return false }
+        switch e {
+        case .ioOnClosedChannel, .alreadyClosed, .remotePeerClosed, .closedRemotely:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 在 SFTP 通道上执行操作；若通道在使用中途死亡，丢弃缓存通道、
+    /// 重开后自动重试一次。
+    ///
+    /// 背景：SFTP 通道按服务器复用，但"关闭通道"（切工作区、删服务器）
+    /// 与"使用通道"（列表/读写）不在同一个临界区里，`sftp(for:)` 的
+    /// isActive check-then-use 存在 TOCTOU；对端也可能主动关闭空闲通道。
+    /// 重试让 App 从这类竞态中自愈，而不是把 NIOCore.ChannelError 甩给用户。
+    private func withSFTP<T>(
+        server: ServerConfig,
+        operation: (SFTPClient) async throws -> T
+    ) async throws -> T {
+        let sftp = try await sftp(for: server)
+        do {
+            return try await operation(sftp)
+        } catch {
+            guard isDeadChannelError(error) else { throw error }
+            // 只丢弃"这次用的"旧通道：若并发中已有别人建好新通道并入缓存，
+            // 用 identity 比较避免误杀。
+            if sftpClients[server.id] === sftp {
+                sftpClients.removeValue(forKey: server.id)
+            }
+            try? await sftp.close()
+            let fresh = try await sftp(for: server)
+            return try await operation(fresh)
+        }
+    }
+
     /// 只丢弃 SFTP 通道，不断开整条 SSH 连接。
     ///
     /// 终端 PTY 与 SFTP 共用 `clients[serverID]` 这一条连接：切工作区、
@@ -338,38 +390,40 @@ actor SSHManager {
     }
 
     private func listDirectoryInner(server: ServerConfig, path: String) async throws -> [RemoteFileEntry] {
-        let sftp = try await sftp(for: server)
-        // 解析为绝对路径，避免 "./" 前缀在后续读写中累积
-        let basePath = try await sftp.getRealPath(atPath: path)
-        let listing = try await sftp.listDirectory(atPath: basePath)
-        var entries: [RemoteFileEntry] = []
-        for name in listing {
-            for component in name.components {
-                guard component.filename != ".", component.filename != ".." else { continue }
-                let mode = component.attributes.permissions ?? 0
-                let isDir = (mode & 0o170000) == 0o040000 || component.longname.hasPrefix("d")
-                let fullPath = basePath == "/" ? "/\(component.filename)" : "\(basePath)/\(component.filename)"
-                entries.append(RemoteFileEntry(
-                    name: component.filename,
-                    path: fullPath,
-                    isDirectory: isDir,
-                    size: component.attributes.size
-                ))
+        try await withSFTP(server: server) { sftp in
+            // 解析为绝对路径，避免 "./" 前缀在后续读写中累积
+            let basePath = try await sftp.getRealPath(atPath: path)
+            let listing = try await sftp.listDirectory(atPath: basePath)
+            var entries: [RemoteFileEntry] = []
+            for name in listing {
+                for component in name.components {
+                    guard component.filename != ".", component.filename != ".." else { continue }
+                    let mode = component.attributes.permissions ?? 0
+                    let isDir = (mode & 0o170000) == 0o040000 || component.longname.hasPrefix("d")
+                    let fullPath = basePath == "/" ? "/\(component.filename)" : "\(basePath)/\(component.filename)"
+                    entries.append(RemoteFileEntry(
+                        name: component.filename,
+                        path: fullPath,
+                        isDirectory: isDir,
+                        size: component.attributes.size
+                    ))
+                }
             }
-        }
-        return entries.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            return entries.sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
         }
     }
 
     func readFile(server: ServerConfig, path: String) async throws -> String {
         do {
-            let sftp = try await sftp(for: server)
-            var buffer = try await sftp.withFile(filePath: path, flags: .read) { file in
-                try await file.readAll()
+            try await withSFTP(server: server) { sftp in
+                var buffer = try await sftp.withFile(filePath: path, flags: .read) { file in
+                    try await file.readAll()
+                }
+                return buffer.readString(length: buffer.readableBytes) ?? ""
             }
-            return buffer.readString(length: buffer.readableBytes) ?? ""
         } catch let e as SSHManagerError {
             throw e
         } catch {
@@ -379,12 +433,13 @@ actor SSHManager {
 
     func writeFile(server: ServerConfig, path: String, text: String) async throws {
         do {
-            let sftp = try await sftp(for: server)
-            var buffer = ByteBufferAllocator().buffer(capacity: text.utf8.count)
-            buffer.writeString(text)
-            let data = buffer
-            try await sftp.withFile(filePath: path, flags: [.write, .create, .truncate]) { file in
-                try await file.write(data, at: 0)
+            try await withSFTP(server: server) { sftp in
+                var buffer = ByteBufferAllocator().buffer(capacity: text.utf8.count)
+                buffer.writeString(text)
+                let data = buffer
+                try await sftp.withFile(filePath: path, flags: [.write, .create, .truncate]) { file in
+                    try await file.write(data, at: 0)
+                }
             }
         } catch let e as SSHManagerError {
             throw e
@@ -398,11 +453,12 @@ actor SSHManager {
     /// 读文件全部字节（Data 版：调用方自己做二进制/大小检查）。
     func readFileData(server: ServerConfig, path: String) async throws -> Data {
         do {
-            let sftp = try await sftp(for: server)
-            var buffer = try await sftp.withFile(filePath: path, flags: .read) { file in
-                try await file.readAll()
+            try await withSFTP(server: server) { sftp in
+                var buffer = try await sftp.withFile(filePath: path, flags: .read) { file in
+                    try await file.readAll()
+                }
+                return Data(buffer.readableBytesView)
             }
-            return Data(buffer.readableBytesView)
         } catch let e as SSHManagerError {
             throw e
         } catch {
@@ -413,12 +469,13 @@ actor SSHManager {
     /// 写文件全部字节（不存在则创建，存在则截断覆盖）。
     func writeFileData(server: ServerConfig, path: String, data: Data) async throws {
         do {
-            let sftp = try await sftp(for: server)
-            var buffer = ByteBufferAllocator().buffer(capacity: data.count)
-            buffer.writeBytes(data)
-            let frozen = buffer
-            try await sftp.withFile(filePath: path, flags: [.write, .create, .truncate]) { file in
-                try await file.write(frozen, at: 0)
+            try await withSFTP(server: server) { sftp in
+                var buffer = ByteBufferAllocator().buffer(capacity: data.count)
+                buffer.writeBytes(data)
+                let frozen = buffer
+                try await sftp.withFile(filePath: path, flags: [.write, .create, .truncate]) { file in
+                    try await file.write(frozen, at: 0)
+                }
             }
         } catch let e as SSHManagerError {
             throw e
@@ -429,8 +486,9 @@ actor SSHManager {
 
     func createDirectory(server: ServerConfig, path: String) async throws {
         do {
-            let sftp = try await sftp(for: server)
-            try await sftp.createDirectory(atPath: path)
+            try await withSFTP(server: server) { sftp in
+                try await sftp.createDirectory(atPath: path)
+            }
         } catch let e as SSHManagerError {
             throw e
         } catch {
@@ -441,11 +499,12 @@ actor SSHManager {
     /// 删除文件或目录（目录用 rmdir，要求为空；非空目录先由调用方确认）。
     func remove(server: ServerConfig, path: String, isDirectory: Bool) async throws {
         do {
-            let sftp = try await sftp(for: server)
-            if isDirectory {
-                try await sftp.rmdir(at: path)
-            } else {
-                try await sftp.remove(at: path)
+            try await withSFTP(server: server) { sftp in
+                if isDirectory {
+                    try await sftp.rmdir(at: path)
+                } else {
+                    try await sftp.remove(at: path)
+                }
             }
         } catch let e as SSHManagerError {
             throw e
@@ -469,8 +528,9 @@ actor SSHManager {
 
     func rename(server: ServerConfig, oldPath: String, newPath: String) async throws {
         do {
-            let sftp = try await sftp(for: server)
-            try await sftp.rename(at: oldPath, to: newPath)
+            try await withSFTP(server: server) { sftp in
+                try await sftp.rename(at: oldPath, to: newPath)
+            }
         } catch let e as SSHManagerError {
             throw e
         } catch {
@@ -481,8 +541,9 @@ actor SSHManager {
     /// 解析远端路径为绝对路径（"." → 主目录）。
     func realPath(server: ServerConfig, path: String) async throws -> String {
         do {
-            let sftp = try await sftp(for: server)
-            return try await sftp.getRealPath(atPath: path)
+            try await withSFTP(server: server) { sftp in
+                try await sftp.getRealPath(atPath: path)
+            }
         } catch let e as SSHManagerError {
             throw e
         } catch {

@@ -520,11 +520,6 @@ private struct RemoteFolderBrowser: View {
             }
         }
         .task { await loadInitial() }
-        .onDisappear {
-            // 只丢 SFTP 通道，不断整条 SSH 连接（终端会话共用连接，不受影响）。
-            // 工作区打开后会用自己的 SFTPFileSystem 按需重建通道。
-            Task { await SFTPFileSystem(server: server).disconnect() }
-        }
     }
 
     private func navigate(to path: String) {
