@@ -427,7 +427,7 @@ actor SSHManager {
 
     func readFile(server: ServerConfig, path: String) async throws -> String {
         do {
-            try await withSFTP(server: server) { sftp in
+            return try await withSFTP(server: server) { sftp in
                 var buffer = try await sftp.withFile(filePath: path, flags: .read) { file in
                     try await file.readAll()
                 }
@@ -462,7 +462,7 @@ actor SSHManager {
     /// 读文件全部字节（Data 版：调用方自己做二进制/大小检查）。
     func readFileData(server: ServerConfig, path: String) async throws -> Data {
         do {
-            try await withSFTP(server: server) { sftp in
+            return try await withSFTP(server: server) { sftp in
                 var buffer = try await sftp.withFile(filePath: path, flags: .read) { file in
                     try await file.readAll()
                 }
@@ -550,7 +550,7 @@ actor SSHManager {
     /// 解析远端路径为绝对路径（"." → 主目录）。
     func realPath(server: ServerConfig, path: String) async throws -> String {
         do {
-            try await withSFTP(server: server) { sftp in
+            return try await withSFTP(server: server) { sftp in
                 try await sftp.getRealPath(atPath: path)
             }
         } catch let e as SSHManagerError {
