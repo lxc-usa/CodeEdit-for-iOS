@@ -1,0 +1,26 @@
+# SwiftTerm 本地补丁
+
+上游：https://github.com/migueldeicaza/SwiftTerm
+版本：v1.20.0（2026-09-28 vendoring）
+方式：`project.yml` 用 `path: Vendor/SwiftTerm` 引用本地源码，不再从 GitHub 拉取。
+
+## 补丁列表
+
+### 1. 终端快捷栏横屏左右留白（2026-09-28，用户需求）
+
+文件：`Sources/SwiftTerm/iOS/iOSAccessoryView.swift`
+
+需求：横屏时快捷栏左右各空出一键宽。
+
+改动：
+- `setupUI()`：横屏（`frame.width > frame.height`）时，重要按键宽度的分母
+  `importantKeysCount + 2`（11→13 / 13→15）。按键宽度 = 可用宽 / 按键数，
+  分母 +2 恰好空出左右各一键宽，无需压缩或位移。
+- 新增实例变量 `landscapeSideMargin`：横屏时 = 单键宽（`max(aditionalSpaceForImportantKeys, minWidth)`），
+  竖屏为 0。
+- `layoutSubviews()`：左组起点 `x = 2 + sideMargin`，右组终点
+  `right = frame.width - 2 - sideMargin`；`sideMargin` 只在横屏时取
+  `landscapeSideMargin`。
+
+原理：分母+2 后算出的单键宽变小，总占用 = 13×小键宽 + 2×小键宽 = 原可用宽，
+左右各空出一键宽。竖屏分母不变，行为与上游一致。
