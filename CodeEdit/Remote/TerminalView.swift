@@ -2,61 +2,6 @@ import SwiftUI
 import SwiftTerm
 import ObjectiveC
 
-/// 对 TerminalAccessory.layoutSubviews 的一次方法交换（进程内只执行一次）。
-/// 用户 2026-09-27：终端窗口横屏时，键盘第一排（快捷栏）左右两头各空出一个按键的宽度。
-/// TerminalAccessory 是 public 非 open：不能子类化、不能重写方法，只能 swizzle
-/// （v21.5 CI 实测：subclass/override 直接编译失败）。
-/// 做法：先调原始布局，再把整排按钮右移一个键宽（左留白），并保证右端也留一键宽。
-/// 竖屏保持 SwiftTerm 原样。
-private enum TerminalAccessoryLayoutSwizzle {
-    static let apply: Void = {
-        let original = #selector(UIView.layoutSubviews)
-        let replacement = #selector(TerminalAccessory.codeEdit_paddedLayoutSubviews)
-        guard
-            let m1 = class_getInstanceMethod(TerminalAccessory.self, original),
-            let m2 = class_getInstanceMethod(TerminalAccessory.self, replacement)
-        else { return }
-        method_exchangeImplementations(m1, m2)
-    }()
-}
-
-extension TerminalAccessory {
-    /// 交换后的 layoutSubviews（SwiftTerm 原实现已与本方法交换实现）。
-    /// 必须 dynamic：否则 Swift 可能用静态派发，方法交换（ObjC 运行时层面）不生效。
-    @objc dynamic func codeEdit_paddedLayoutSubviews() {
-        // 先走原始布局（交换后这个调用实际执行原始实现）
-        self.codeEdit_paddedLayoutSubviews()
-        // 只在横屏加留白；竖屏保持 SwiftTerm 原样
-        guard bounds.width > bounds.height else { return }
-        let buttons = subviews.compactMap { $0 as? UIButton }
-        guard !buttons.isEmpty else { return }
-        // v1.20.0 布局：左组（esc/ctrl/tab/~//- /F键）从 x=2 向右排；
-        // 右组（方向键等）锚定右边缘从 width-2 向左排。
-        // 做法：左组整体右移（左留一键宽），右组整体左移（右留一键宽）。
-        guard let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }) else { return }
-        let keyW = leftmost.frame.width
-        guard keyW > 0 else { return }
-        let midX = bounds.width / 2
-        // 左移量：首键从 x=2 移到 x=keyW；右移量：末键从 width-2 移到 width-keyW
-        let shift = keyW - 2
-        var leftMaxX: CGFloat = 0
-        var rightMinX: CGFloat = bounds.width
-        for b in buttons {
-            if b.frame.minX < midX {
-                b.frame.origin.x += shift
-                leftMaxX = max(leftMaxX, b.frame.maxX)
-            } else {
-                b.frame.origin.x -= shift
-                rightMinX = min(rightMinX, b.frame.minX)
-            }
-        }
-        // 若左右两组重叠（内容太宽放不下一键宽），回退到原始布局（保底，不错乱）
-        if leftMaxX > rightMinX {
-            self.codeEdit_paddedLayoutSubviews()
-        }
-    }
-}
-
 /// 交互式 SSH 终端：PTY + xterm 仿真，可直接交互。
 ///
 /// - 打开即进入远端 login shell，cd/环境变量等状态保留，可 apt/yum 安装程序
@@ -178,6 +123,45 @@ struct TerminalView: View {
 /// 不管按钮被重建多少次，点按永远先经过三段式状态机；"正常→半高"这半件事仍
 /// 调回 SwiftTerm 原实现（交换后改名）。该方法全库只被键盘按钮调用，无内部
 /// 直调，交换安全。
+/// 终端快捷栏横屏留白容器。
+/// 用户 2026-09-27：终端窗口横屏时，键盘第一排（快捷栏）左右两头各空出一个按键的宽度。
+/// 做法：把 SwiftTerm 的 TerminalAccessory 装进这个容器，横屏时左右各留一键宽；
+/// 竖屏时留白为 0，恢复原样。容器负责在 layout 时按当前方向调整 accessory 的 frame。
+private final class TerminalAccessoryPaddingContainer: UIInputView {
+    /// 横屏留白宽度（约一键宽）；竖屏为 0。
+    var horizontalPadding: CGFloat = 0 {
+        didSet {
+            if horizontalPadding != oldValue {
+                setNeedsLayout()
+            }
+        }
+    }
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: 36), inputViewStyle: .keyboard)
+        autoresizingMask = [.flexibleWidth]
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // 把里面的 TerminalAccessory 按留白定位
+        for subview in subviews {
+            if subview is TerminalAccessory {
+                subview.frame = CGRect(
+                    x: horizontalPadding,
+                    y: 0,
+                    width: max(0, bounds.width - 2 * horizontalPadding),
+                    height: bounds.height
+                )
+            }
+        }
+    }
+}
+
 @MainActor
 private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     /// 终端键盘三段式当前所处阶段。
@@ -188,6 +172,67 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     /// 三段式状态机需要读写键盘抑制标记，弱引用避免循环。
     weak var stageWorkspace: WorkspaceStore?
 
+    /// 终端快捷栏横屏留白容器（懒创建，把 TerminalAccessory 装进去）。
+    private var paddedAccessoryContainer: TerminalAccessoryPaddingContainer?
+
+    /// 找到真正的 TerminalAccessory（可能在留白容器里）。
+    private var realTerminalAccessory: TerminalAccessory? {
+        if let a = super.inputAccessoryView as? TerminalAccessory {
+            return a
+        }
+        if let container = paddedAccessoryContainer {
+            return container.subviews.first(where: { $0 is TerminalAccessory }) as? TerminalAccessory
+        }
+        return nil
+    }
+
+    /// 横屏时返回带留白的容器，竖屏直接返回原 accessory。
+    override var inputAccessoryView: UIView? {
+        get {
+            guard let accessory = super.inputAccessoryView as? TerminalAccessory else {
+                return super.inputAccessoryView
+            }
+            // 判断横屏：iPhone 横屏时 verticalSizeClass 为 .compact
+            // （traitCollection 在 inputAccessoryView 查询时已可用）
+            let isLandscape = traitCollection.verticalSizeClass == .compact
+            guard isLandscape else {
+                // 竖屏：把 accessory 从容器里拿出来（如果之前装进去过），直接返回
+                if let container = paddedAccessoryContainer,
+                   container.superview == nil,
+                   accessory.superview === container {
+                    accessory.removeFromSuperview()
+                    accessory.frame = CGRect(x: 0, y: 0, width: container.bounds.width, height: 36)
+                }
+                return accessory
+            }
+            // 横屏：懒创建容器，把 accessory 装进去
+            let container: TerminalAccessoryPaddingContainer
+            if let existing = paddedAccessoryContainer {
+                container = existing
+            } else {
+                container = TerminalAccessoryPaddingContainer()
+                container.backgroundColor = accessory.backgroundColor
+                paddedAccessoryContainer = container
+            }
+            if accessory.superview !== container {
+                accessory.removeFromSuperview()
+                accessory.frame = CGRect(x: 0, y: 0, width: container.bounds.width, height: 36)
+                accessory.autoresizingMask = []
+                container.addSubview(accessory)
+            }
+            // 一键宽：取 accessory 里最左边按钮的宽度；取不到用 50
+            var pad: CGFloat = 50
+            let buttons = accessory.subviews.compactMap { $0 as? UIButton }
+            if let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }),
+               leftmost.frame.width > 0 {
+                pad = leftmost.frame.width
+            }
+            container.horizontalPadding = pad
+            container.setNeedsLayout()
+            return container
+        }
+    }
+
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         let old = previousTraitCollection
@@ -197,7 +242,7 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
         // 等一帧，让旋转动画先更新 accessory 的 bounds，再按最终宽度重建
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if let accessory = self.inputAccessoryView as? TerminalAccessory {
+            if let accessory = self.realTerminalAccessory {
                 accessory.setupUI()
                 accessory.setNeedsLayout()
                 accessory.layoutIfNeeded()
@@ -307,9 +352,6 @@ private struct TerminalHostView: UIViewRepresentable {
         _ = TerminalKeyboardToggleSwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
-        // 终端快捷栏横屏留白：对 TerminalAccessory.layoutSubviews 做方法交换
-        // （用户 2026-09-27：横屏第一排左右各空一键宽）。进程内只执行一次。
-        _ = TerminalAccessoryLayoutSwizzle.apply
         let coordinator = context.coordinator
         tv.terminalDelegate = coordinator
         // Coordinator 是非隔离的（SwiftTerm 的 delegate 方法都是非隔离要求），
