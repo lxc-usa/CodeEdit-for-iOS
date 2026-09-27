@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftTerm
+import ObjectiveC
 
 /// 交互式 SSH 终端：PTY + xterm 仿真，可直接交互。
 ///

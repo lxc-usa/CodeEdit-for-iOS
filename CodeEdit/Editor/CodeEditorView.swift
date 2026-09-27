@@ -169,19 +169,66 @@ struct CodeEditorView: UIViewRepresentable {
 
         // MARK: - 符号快捷栏
 
+        /// 符号栏容器：横屏（放得下时）键宽拉满整行、像系统键盘一样铺满；
+        /// 竖屏放不下时保持可横滑。键帽样式对标系统键盘：圆角 + 细阴影。
+        private final class SymbolBarView: UIView {
+            var keyWidthConstraints: [NSLayoutConstraint] = []
+            var symbolStack: UIStackView?
+            var keyCount: Int = 0
+            /// 铺满模式的键间距（贴近系统键盘的键缝）
+            private let evenSpacing: CGFloat = 6
+            /// 铺满模式的最小键宽：再窄就切回横滑，保证可点
+            private let minEvenKeyWidth: CGFloat = 36
+            /// 横滑模式的固定键宽
+            private let scrollKeyWidth: CGFloat = 44
+
+            override func layoutSubviews() {
+                super.layoutSubviews()
+                let w = bounds.width
+                guard w > 0, keyCount > 0, !keyWidthConstraints.isEmpty else { return }
+                // 键区宽度 = 全宽 - 两侧边距(8+8) - 隐藏按钮(40)
+                //            - 按钮与滚动区间距(8) - 栈内边距(8+8)
+                let keysArea = w - 72
+                let count = CGFloat(keyCount)
+                let evenWidth = (keysArea - evenSpacing * (count - 1)) / count
+                let evenly = evenWidth >= minEvenKeyWidth
+                let targetWidth = evenly ? evenWidth : scrollKeyWidth
+                let targetSpacing: CGFloat = evenly ? evenSpacing : 8
+                // 只在变化时改，避免布局循环
+                for c in keyWidthConstraints where abs(c.constant - targetWidth) > 0.5 {
+                    c.constant = targetWidth
+                }
+                if let stack = symbolStack, abs(stack.spacing - targetSpacing) > 0.01 {
+                    stack.spacing = targetSpacing
+                }
+            }
+        }
+
+        /// 键帽样式对标 iOS 系统键盘：圆角 + 细阴影。
+        /// 底色沿用 tertiarySystemBackground（浅色下为白、深色下为深灰，与系统键帽一致）。
+        private func applyKeyCapStyle(_ button: UIButton) {
+            button.backgroundColor = .tertiarySystemBackground
+            button.layer.cornerRadius = 6
+            button.layer.shadowColor = UIColor.black.cgColor
+            button.layer.shadowOpacity = 0.25
+            button.layer.shadowOffset = CGSize(width: 0, height: 1)
+            button.layer.shadowRadius = 1
+        }
+
         func makeSymbolBar() -> UIView {
-            let container = UIView()
+            let container = SymbolBarView()
             container.backgroundColor = .secondarySystemBackground
             // inputAccessoryView 用 frame 定高，宽度由系统拉伸
-            container.frame = CGRect(x: 0, y: 0, width: 0, height: 46)
+            container.frame = CGRect(x: 0, y: 0, width: 0, height: 48)
             container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-            // 右侧固定的"隐藏键盘"按钮：不随符号行滚动，常驻可点
+            // 右侧固定的"隐藏键盘"按钮：不随符号行滚动，常驻可点（样式与符号键一致）
             let hideButton = UIButton(type: .system)
             hideButton.setImage(UIImage(systemName: "keyboard.chevron.compact.down"), for: .normal)
+            hideButton.setPreferredSymbolConfiguration(
+                UIImage.SymbolConfiguration(pointSize: 18, weight: .regular), forImageIn: .normal)
             hideButton.tintColor = .label
-            hideButton.backgroundColor = .tertiarySystemBackground
-            hideButton.layer.cornerRadius = 6
+            applyKeyCapStyle(hideButton)
             hideButton.accessibilityLabel = NSLocalizedString("隐藏键盘", comment: "Hide keyboard button on the editor symbol bar")
             hideButton.addTarget(self, action: #selector(hideKeyboardTapped), for: .touchUpInside)
             hideButton.translatesAutoresizingMaskIntoConstraints = false
@@ -206,20 +253,25 @@ struct CodeEditorView: UIViewRepresentable {
             for symbol in symbols {
                 let button = UIButton(type: .system)
                 button.setTitle(symbol, for: .normal)
-                button.titleLabel?.font = .monospacedSystemFont(ofSize: 17, weight: .regular)
+                button.titleLabel?.font = .systemFont(ofSize: 20, weight: .regular)
                 button.setTitleColor(.label, for: .normal)
-                button.backgroundColor = .tertiarySystemBackground
-                button.layer.cornerRadius = 6
-                button.contentEdgeInsets = UIEdgeInsets(top: 5, left: 11, bottom: 5, right: 11)
+                applyKeyCapStyle(button)
+                // 宽由 SymbolBarView.layoutSubviews 按横竖屏分配（横屏铺满 / 竖屏横滑）
+                let wc = button.widthAnchor.constraint(equalToConstant: 44)
+                wc.isActive = true
+                container.keyWidthConstraints.append(wc)
+                button.heightAnchor.constraint(equalToConstant: 38).isActive = true
                 button.addTarget(self, action: #selector(symbolTapped(_:)), for: .touchUpInside)
                 stack.addArrangedSubview(button)
             }
+            container.symbolStack = stack
+            container.keyCount = symbols.count
 
             NSLayoutConstraint.activate([
                 hideButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
                 hideButton.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                hideButton.widthAnchor.constraint(equalToConstant: 36),
-                hideButton.heightAnchor.constraint(equalToConstant: 34),
+                hideButton.widthAnchor.constraint(equalToConstant: 40),
+                hideButton.heightAnchor.constraint(equalToConstant: 38),
 
                 scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 scrollView.trailingAnchor.constraint(equalTo: hideButton.leadingAnchor, constant: -8),
@@ -228,9 +280,9 @@ struct CodeEditorView: UIViewRepresentable {
 
                 stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 8),
                 stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -8),
-                stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 6),
-                stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -6),
-                stack.heightAnchor.constraint(equalToConstant: 34),
+                stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 5),
+                stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -5),
+                stack.heightAnchor.constraint(equalToConstant: 38),
             ])
             return container
         }
