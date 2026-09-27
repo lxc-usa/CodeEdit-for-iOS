@@ -44,7 +44,9 @@ struct CodeEditorView: UIViewRepresentable {
         tv.smartDashesType = .no
         tv.smartInsertDeleteType = .no
         tv.spellCheckingType = .no
-        tv.keyboardType = .asciiCapable
+        // 允许切换输入法（用户 2026-09-27：编辑界面键盘要能切中文等输入法）；
+        // 不用 .asciiCapable（会把非 ASCII 键盘排除在地球键轮换之外）。
+        tv.keyboardType = .default
         tv.keyboardAppearance = theme.isDark ? .dark : .light
 
         // 系统查找/替换面板（iOS 16+）
