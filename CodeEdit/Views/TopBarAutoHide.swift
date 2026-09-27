@@ -28,8 +28,9 @@ final class TopBarScrollTracker {
     private let cooldown: TimeInterval = 0.5
     /// 旋转抑制截止时间：旋转动画约 0.3～0.5s，留足余量
     private var rotationSuppressUntil = Date.distantPast
-    private let rotationSuppression: TimeInterval = 1.0
+    private let rotationSuppression: TimeInterval = 1.5
     private var orientationObserver: NSObjectProtocol?
+    /// 上次见到的滚动区 bounds 尺寸：旋转/键盘升降/分屏会改变它，普通滚动不会。
 
     init(workspace: WorkspaceStore) {
         self.workspace = workspace
@@ -59,6 +60,20 @@ final class TopBarScrollTracker {
     /// 在 UIScrollView.contentOffset 的 KVO 回调里调用（主线程）。
     func handleScroll(_ scrollView: UIScrollView) {
         let y = scrollView.contentOffset.y
+        // bounds 尺寸突变 = 旋转 / 键盘升降 / 分屏变化：这是同步的、
+        // 不会漏的"布局剧变"信号，不依赖 UIDevice 方向通知（可能迟到或不来）。
+        // 剧变期间只同步基准，不触发显隐——旋转中的 bounds/inset 变化
+        // 会让 contentOffset 上下乱跳，任何一次误判都可能点燃
+        // "横跳 → 导航栏动画 → 重排 → 更多横跳" 的死循环（见类注释）。
+        // v19 真机：转屏转一半主线程被 wedged、键盘窗口卡在横屏方向，
+        // v18 只靠 UIDevice 通知的抑制没防住，故加这一道同步的闸。
+        let size = scrollView.bounds.size
+        if lastBoundsSize != .zero
+            && (abs(size.width - lastBoundsSize.width) > 1
+                || abs(size.height - lastBoundsSize.height) > 1) {
+            rotationSuppressUntil = Date().addingTimeInterval(rotationSuppression)
+        }
+        lastBoundsSize = size
         // 旋转期间：只同步基准，不触发显隐。旋转中的 bounds/inset 变化
         // 会让 contentOffset 上下乱跳，任何一次误判都可能点燃
         // "横跳 → 导航栏动画 → 重排 → 更多横跳" 的死循环（见类注释）。

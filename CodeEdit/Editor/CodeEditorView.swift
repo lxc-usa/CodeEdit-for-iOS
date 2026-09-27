@@ -189,39 +189,38 @@ struct CodeEditorView: UIViewRepresentable {
         private final class SymbolBarView: UIView {
             var scrollView: UIScrollView?
             var symbolStack: UIStackView?
-            var hideButton: UIButton?
             /// 符号键的宽/高约束（随横竖屏切换更新 constant）
             var keySizeConstraints: [(w: NSLayoutConstraint, h: NSLayoutConstraint)] = []
-            /// 隐藏按钮的宽/高约束（跟随键尺寸）
-            var hideSizeConstraints: (w: NSLayoutConstraint, h: NSLayoutConstraint)?
             /// 键组与可见区边缘的最小间距
             private let minSideInset: CGFloat = 8
             /// 已应用的键尺寸标记，避免 layoutSubviews 里重复设置
             private var appliedKeySpec = ""
-            /// 当前栏高（键高 + 上下各 7pt）
-            private var barHeight: CGFloat = 58
 
-            /// 隐藏按钮悬浮在滚动区上时，右侧需预留的宽度（按钮宽 + 两侧各 8pt）
-            private var buttonReserve: CGFloat {
-                (hideSizeConstraints?.w.constant ?? 44) + 16
+            /// 真实界面方向。不能拿自身的 bounds 判断：横条的宽永远大于高，
+            /// v19 用 bounds.width > bounds.height 把竖屏恒判成横屏，
+            /// 竖屏拿到了 30×28 的小键（真机实测）。
+            private var isLandscape: Bool {
+                let ref = window?.bounds ?? UIScreen.main.bounds
+                return ref.width > ref.height
             }
 
             override func layoutSubviews() {
                 // 先按当前横竖屏/机型算出目标键尺寸（super 之后读 stack.bounds 才有效，
                 // 尺寸变化会触发下一次 layout，本次用旧 contentW 算 inset，下次纠正）
                 let isPad = UIDevice.current.userInterfaceIdiom == .pad
-                let isLandscape = bounds.width > bounds.height
+                let landscape = isLandscape
                 let keyW: CGFloat
                 let keyH: CGFloat
                 let fontSize: CGFloat
                 if isPad {
                     keyW = 44; keyH = 44; fontSize = 22
-                } else if isLandscape {
+                } else if landscape {
                     keyW = 30; keyH = 28; fontSize = 20
                 } else {
-                    // 系统公式（竖屏实测：边距 3×2 + 间隙 6×9）：(W-60)/10
-                    keyW = max(30, (bounds.width - 60) / 10)
-                    keyH = 44; fontSize = 22
+                    // 竖屏：14 符号键 + 隐藏键共 15 个，挤一挤全部显示，不横滑
+                    // （用户 2026-09-27：竖屏只差两三个键位，要求挤挤全显示）
+                    keyW = max(18, (bounds.width - 16 - 14 * 6) / 15)
+                    keyH = 44; fontSize = 20
                 }
                 let spec = "\(keyW)x\(keyH)"
                 if spec != appliedKeySpec {
@@ -230,18 +229,11 @@ struct CodeEditorView: UIViewRepresentable {
                         w.constant = keyW
                         h.constant = keyH
                     }
-                    hideSizeConstraints?.w.constant = keyW
-                    hideSizeConstraints?.h.constant = keyH
                     if let stack = symbolStack {
                         for case let b as UIButton in stack.arrangedSubviews {
                             b.titleLabel?.font = .systemFont(ofSize: fontSize, weight: .regular)
                         }
                     }
-                    barHeight = keyH + 14
-                }
-                // inputAccessoryView 跟 frame 高度走；只在变化时改，避免布局循环
-                if abs(frame.height - barHeight) > 0.5 {
-                    frame.size.height = barHeight
                 }
 
                 super.layoutSubviews()
@@ -249,17 +241,15 @@ struct CodeEditorView: UIViewRepresentable {
                 let visibleW = sv.bounds.width
                 let contentW = stack.bounds.width
                 guard visibleW > 0, contentW > 0 else { return }
-                // 放得下：整组按整栏宽度居中；放不下：左贴边，右给悬浮按钮留位
-                let left: CGFloat
-                let right: CGFloat
-                if contentW > visibleW {
-                    left = minSideInset
-                    right = buttonReserve
+                // 15 个键在 iPhone 上永远放得下：整组居中；
+                // 极窄屏幕兜底：放不下时左贴边横滑。
+                let side: CGFloat
+                if contentW < visibleW {
+                    side = max(minSideInset, (visibleW - contentW) / 2)
                 } else {
-                    left = max(minSideInset, (visibleW - contentW) / 2)
-                    right = left
+                    side = minSideInset
                 }
-                let inset = UIEdgeInsets(top: 0, left: left, bottom: 0, right: right)
+                let inset = UIEdgeInsets(top: 0, left: side, bottom: 0, right: side)
                 // 只在变化时改，避免布局循环
                 if sv.contentInset != inset {
                     sv.contentInset = inset
@@ -281,13 +271,13 @@ struct CodeEditorView: UIViewRepresentable {
         func makeSymbolBar() -> UIView {
             let container = SymbolBarView()
             container.backgroundColor = .secondarySystemBackground
-            // inputAccessoryView 用 frame 定高，宽度由系统拉伸
-            // 行高对标系统键盘的行距：44pt 键 + 上下各 7pt
+            // inputAccessoryView 用 frame 定高 58pt，宽度由系统拉伸；
+            // 高度定死后 layout 里绝不再改，否则键盘占位和实际高度打架、
+            // 底部漏出白条（v19 真机实测）。
             container.frame = CGRect(x: 0, y: 0, width: 0, height: 58)
             container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-            // 右侧"隐藏键盘"按钮：悬浮于滚动区之上（不占布局位），常驻可点；
-            // 样式与符号键一致，尺寸跟随键尺寸。
+            // "隐藏键盘"按钮：样式与符号键一致，尺寸跟随键尺寸，排在最后。
             let hideButton = UIButton(type: .system)
             hideButton.setImage(UIImage(systemName: "keyboard.chevron.compact.down"), for: .normal)
             hideButton.setPreferredSymbolConfiguration(
@@ -301,9 +291,8 @@ struct CodeEditorView: UIViewRepresentable {
             let scrollView = UIScrollView()
             scrollView.showsHorizontalScrollIndicator = false
             scrollView.translatesAutoresizingMaskIntoConstraints = false
-            // 先加滚动区，后加隐藏按钮 → 按钮浮在上层
+            // 先加滚动区
             container.addSubview(scrollView)
-            container.addSubview(hideButton)
 
             let stack = UIStackView()
             stack.axis = .horizontal
@@ -314,8 +303,7 @@ struct CodeEditorView: UIViewRepresentable {
 
             // 符号快捷键：只放系统英文 123 首屏没有的符号，避免重复。
             // 系统首屏已有：- / : ; ( ) $ & @ " . , ? ! ' —— 这里不再放。
-            // 键尺寸对标系统键盘（见 SymbolBarView.layoutSubviews，真机实测），不随宽度拉伸；
-            // 横屏放得下时整组按整栏居中，竖屏放不下时横滑。
+            // 竖屏 15 个键挤一排全部显示（用户要求），横屏键尺寸对标系统键盘（实测 30×28）。
             let symbols = ["⇥", "{", "}", "[", "]", "=", "<", ">", "\\", "|",
                            "+", "*", "_", "#"]
             var keySizeConstraints: [(w: NSLayoutConstraint, h: NSLayoutConstraint)] = []
@@ -333,21 +321,21 @@ struct CodeEditorView: UIViewRepresentable {
                 button.addTarget(self, action: #selector(symbolTapped(_:)), for: .touchUpInside)
                 stack.addArrangedSubview(button)
             }
-            container.scrollView = scrollView
-            container.symbolStack = stack
-            container.hideButton = hideButton
-            container.keySizeConstraints = keySizeConstraints
+            // 隐藏键作为第 15 个普通键排在最后（不再悬浮）：竖屏 15 个键挤一排全显示，
+            // 横屏整组居中；从根上杜绝悬浮按钮压住符号键（v19 真机实测压住了）。
             let hideW = hideButton.widthAnchor.constraint(equalToConstant: 44)
             let hideH = hideButton.heightAnchor.constraint(equalToConstant: 44)
             hideW.isActive = true
             hideH.isActive = true
-            container.hideSizeConstraints = (hideW, hideH)
+            keySizeConstraints.append((hideW, hideH))
+            stack.addArrangedSubview(hideButton)
+
+            container.scrollView = scrollView
+            container.symbolStack = stack
+            container.keySizeConstraints = keySizeConstraints
 
             NSLayoutConstraint.activate([
-                hideButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
-                hideButton.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-
-                // 滚动区占整栏宽度；居中/横滑的水平边距由
+                // 滚动区占整栏；整组居中/横滑的水平边距由
                 // SymbolBarView.layoutSubviews 经 contentInset 控制
                 scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -356,9 +344,14 @@ struct CodeEditorView: UIViewRepresentable {
 
                 stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
                 stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-                stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 7),
-                stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -7),
+                stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+                stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+                // 栈高 = 栏高，键在栈内垂直居中（stack.alignment = .center）：
+                // 竖屏 44pt 键上下各 7pt，横屏 28pt 键垂直居中
+                stack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
             ])
+            // 首帧 inset 就正确，不等 layoutSubviews 纠正
+            scrollView.contentInset = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
             return container
         }
 
