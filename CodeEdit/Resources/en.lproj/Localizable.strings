@@ -201,3 +201,4 @@
 "SFTP 通道已关闭，请重试" = "SFTP channel closed, please try again";
 "服务器关闭了 SFTP 通道，请重试" = "Server closed the SFTP channel, please try again";
 "SFTP 通道错误（%@）" = "SFTP channel error (%@)";
+"终端连接已断开，请重试" = "Terminal connection lost, please try again";

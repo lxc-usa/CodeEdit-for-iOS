@@ -13,7 +13,7 @@ import Foundation
 ///   经输入流发 WindowChangeRequest 通知远端（top/vi 重排版靠它）。
 @MainActor
 final class InteractiveShell: ObservableObject {
-    enum State {
+    enum State: Equatable {
         case connecting
         case connected
         case failed(String)

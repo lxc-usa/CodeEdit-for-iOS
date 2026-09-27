@@ -31,7 +31,7 @@ struct EditorAreaView: View {
                 ForEach(workspace.openTerminals) { tab in
                     let isActive = workspace.selectedTerminal?.id == tab.id
                     TerminalView(
-                        serverID: tab.serverID,
+                        tab: tab,
                         initialPath: nil,
                         servers: servers,
                         settings: settings,

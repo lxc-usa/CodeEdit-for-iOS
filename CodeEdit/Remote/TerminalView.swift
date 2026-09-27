@@ -13,7 +13,8 @@ import SwiftTerm
 /// - 字体/字号与代码编辑器共用同一套设置
 @MainActor
 struct TerminalView: View {
-    let serverID: UUID
+    /// 标签页：shell 退出时直接关闭的就是这个标签。
+    let tab: TerminalTab
     /// 从 SFTP 页点终端图标进入时，打开后自动 cd 到的远端路径；nil 表示不 cd。
     /// 仅新会话生效；复用保持中的会话时不执行（保持"继续之前状态"的语义）。
     let initialPath: String?
@@ -28,14 +29,14 @@ struct TerminalView: View {
     /// 不影响会话；只有显式关闭标签才结束（见 WorkspaceStore.closeTerminal）。
     @StateObject private var shell: InteractiveShell
 
-    init(serverID: UUID, initialPath: String?, servers: ServerStore, settings: SettingsStore, workspace: WorkspaceStore, isActive: Bool = true) {
-        self.serverID = serverID
+    init(tab: TerminalTab, initialPath: String?, servers: ServerStore, settings: SettingsStore, workspace: WorkspaceStore, isActive: Bool = true) {
+        self.tab = tab
         self.initialPath = initialPath
         self.isActive = isActive
         self.servers = servers
         self.settings = settings
         self.workspace = workspace
-        _shell = StateObject(wrappedValue: TerminalSessionCache.shared.shell(for: serverID))
+        _shell = StateObject(wrappedValue: TerminalSessionCache.shared.shell(for: tab.serverID))
     }
 
     var body: some View {
@@ -69,9 +70,19 @@ struct TerminalView: View {
                 )
             }
         }
-        .navigationTitle(servers.server(id: serverID)?.name ?? "SSH 终端")
+        .navigationTitle(servers.server(id: tab.serverID)?.name ?? "SSH 终端")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: connect)
+        .onChange(of: shell.state) { _, newState in
+            // 远端 shell 自己退出（用户敲了 exit）：直接关闭当前标签，
+            // 不展示"连接失败"。closeTerminal 幂等，重复调用无害。
+            // 注意：重试路径（connect() 里 stop→start 背靠背）不会经过
+            // .ended——旧任务的收尾被 generation 守卫拦下，所以这里不会
+            // 误关正在重连的标签。
+            if case .ended = newState {
+                workspace.closeTerminal(tab)
+            }
+        }
         // 注意：这里故意没有 onDisappear。横竖屏切换时 ContentView 会在
         // compact/split 两种布局间重建整个编辑区，onDisappear 会被触发；
         // 若在此结束会话，旋转一次就掉一次连接（远端 shell 被写 exit 杀掉）。
@@ -79,7 +90,7 @@ struct TerminalView: View {
     }
 
     private func connect() {
-        guard let server = servers.server(id: serverID) else { return }
+        guard let server = servers.server(id: tab.serverID) else { return }
         // 会话还活着（旋转重建、切标签回来）：直接复用，不重开；
         // makeUIView 重建时会重新把 onData 挂到新视图，暂存的输出自动补上。
         if shell.isAlive { return }

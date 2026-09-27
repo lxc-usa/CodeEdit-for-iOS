@@ -11,6 +11,9 @@ enum SSHManagerError: LocalizedError {
     case connectionFailed(stage: String, underlying: Error)
     /// 握手算法协商失败：已自动抓取服务器 KEXINIT，把双方算法清单摆出来，不再靠猜。
     case handshakeFailed(host: String, port: Int, probe: SSHKexProbe.Result?, raw: String)
+    /// 终端会话"正常"结束但 SSH 主连接已死：掉线导致的假正常结束，
+    /// 不能混成"shell 自己退出"，按连接失败处理。
+    case sessionLost
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +25,8 @@ enum SSHManagerError: LocalizedError {
             return String(localized: "无法读取服务器主机密钥")
         case .connectionFailed(let stage, let underlying):
             return String(format: NSLocalizedString("%@失败：%@", comment: ""), stage, describeSSHError(underlying))
+        case .sessionLost:
+            return String(localized: "终端连接已断开，请重试")
         case .handshakeFailed(let host, let port, let probe, let raw):
             var lines = [String(format: NSLocalizedString("连接 %@:%d 失败：SSH 算法协商不一致。", comment: ""), host, port)]
             if let p = probe, !p.isEmpty {
@@ -119,10 +124,11 @@ func describeSSHError(_ error: Error) -> String {
     if let e = error as? ChannelError {
         // 通道在使用中途被关闭（并发丢弃、对端关闭、网络抖动）。
         // 正常已被 withSFTP 的重试消化，走到这里说明重试也失败了。
+        // case 以 swift-nio 2.81.0 源码实锤为准。
         switch e {
-        case .ioOnClosedChannel, .alreadyClosed, .closedRemotely:
+        case .ioOnClosedChannel, .alreadyClosed:
             return String(localized: "SFTP 通道已关闭，请重试")
-        case .remotePeerClosed:
+        case .outputClosed, .inputClosed, .eof:
             return String(localized: "服务器关闭了 SFTP 通道，请重试")
         default:
             return String(format: NSLocalizedString("SFTP 通道错误（%@）", comment: ""), String(describing: e))
@@ -245,10 +251,13 @@ actor SSHManager {
     // MARK: - SFTP 通道容错
 
     /// 通道已死的错误：并发 drop / 对端关闭 / 网络抖动导致通道不可用。
+    /// 注意：ChannelError 的 case 以 swift-nio 源码为准（2.81.0 实锤），
+    /// 不存在 remotePeerClosed / closedRemotely——凭记忆写那两个 case 会
+    /// 直接编译失败，已按真实 case 修正。
     private func isDeadChannelError(_ error: Error) -> Bool {
         guard let e = error as? ChannelError else { return false }
         switch e {
-        case .ioOnClosedChannel, .alreadyClosed, .remotePeerClosed, .closedRemotely:
+        case .ioOnClosedChannel, .alreadyClosed, .outputClosed, .inputClosed, .eof:
             return true
         default:
             return false
@@ -611,43 +620,65 @@ actor SSHManager {
             terminalPixelHeight: 0,
             terminalModes: SSHTerminalModes([:])
         )
-        try await client.withPTY(request) { inbound, outbound in
-            // PTY 已建好，通知 UI 切 connected
-            onReady()
-            let writerBox = SendableBox(outbound)
-            // 用户输入 → 远端。子任务只捕获 Sendable 值（input 流 + 盒子）。
-            // 输出循环结束后 cancel；`for await` 不响应 cancel，真正的结束靠
-            // UI 层 finish 输入流（stop() / 会话收尾必调），任务随即退出。
-            let forwarder = Task {
-                for await event in input {
-                    switch event {
-                    case .bytes(let bytes):
-                        guard !bytes.isEmpty else { continue }
-                        var buffer = ByteBuffer()
-                        buffer.writeBytes(bytes)
-                        try? await writerBox.value.write(buffer)
-                    case .resize(let cols, let rows):
-                        try? await writerBox.value.changeSize(
-                            cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+        // 会话是否曾经建好：只有"建好之后"的通道关闭才可能是 shell 自己退出；
+        // 建好之前的失败一律是真连接失败。perform 闭包不是 @Sendable，
+        // 捕获局部 var 合法；withPTY 只调用一次 perform，无并发写入。
+        var sessionEstablished = false
+        do {
+            try await client.withPTY(request) { inbound, outbound in
+                sessionEstablished = true
+                // PTY 已建好，通知 UI 切 connected
+                onReady()
+                let writerBox = SendableBox(outbound)
+                // 用户输入 → 远端。子任务只捕获 Sendable 值（input 流 + 盒子）。
+                // 输出循环结束后 cancel；`for await` 不响应 cancel，真正的结束靠
+                // UI 层 finish 输入流（stop() / 会话收尾必调），任务随即退出。
+                let forwarder = Task {
+                    for await event in input {
+                        switch event {
+                        case .bytes(let bytes):
+                            guard !bytes.isEmpty else { continue }
+                            var buffer = ByteBuffer()
+                            buffer.writeBytes(bytes)
+                            try? await writerBox.value.write(buffer)
+                        case .resize(let cols, let rows):
+                            try? await writerBox.value.changeSize(
+                                cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+                        }
                     }
                 }
-            }
-            defer { forwarder.cancel() }
-            do {
-                for try await item in inbound {
-                    let bytes: [UInt8]
-                    switch item {
-                    case .stdout(let buffer), .stderr(let buffer):
-                        bytes = Array(buffer.readableBytesView)
-                    }
-                    if !bytes.isEmpty {
-                        output.yield(bytes)
-                    }
+                defer { forwarder.cancel() }
+                do {
+                    for try await item in inbound {
+                        let bytes: [UInt8]
+                        switch item {
+                        case .stdout(let buffer), .stderr(let buffer):
+                            bytes = Array(buffer.readableBytesView)
+                        }
+                        if !bytes.isEmpty {
+                            output.yield(bytes)
+                        }
                 }
             } catch {
                 // 通道关闭或出错：shell 已退出，视为正常结束
             }
             output.finish()
+        }
+        } catch {
+            // 用户敲 exit → shell 退出 → sshd 半关闭通道 → withPTY 尾部的
+            // channel.close() 抛 ChannelError.inputClosed（真机实锤 code 6）。
+            // 此时 SSH 主连接还活着（shell 退出不影响主连接），视为正常结束，
+            // 直接返回；真掉线时主连接已死，照常抛错走"连接失败"。
+            if sessionEstablished, isDeadChannelError(error), client.isConnected {
+                return
+            }
+            throw error
+        }
+        // withPTY 正常返回但主连接已死：掉线导致的"假正常结束"——对端关闭通道时
+        // Citadel 的输出流以 clean finish 收尾（handlerRemoved → .eof(nil)），
+        // 不抛错。按连接失败处理，不能混成"shell 自己退出"。
+        if !client.isConnected {
+            throw SSHManagerError.sessionLost
         }
     }
 }
