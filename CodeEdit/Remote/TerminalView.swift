@@ -2,6 +2,34 @@ import SwiftUI
 import SwiftTerm
 import ObjectiveC
 
+/// SwiftTerm TerminalAccessory 的横屏留白版。
+/// 用户 2026-09-27：终端窗口横屏时，键盘第一排（快捷栏）左右两头各空出一个按键的宽度。
+/// 做法：子类化 TerminalAccessory（public 非 open，可子类化），重写 layoutSubviews，
+/// 横屏时把整排按钮右移一个键宽（左留白），并保证右端也留出至少一个键宽。
+/// 竖屏保持 SwiftTerm 原样（从 x=2 开始排）。
+final class PaddedTerminalAccessory: TerminalAccessory {
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        // 只在横屏加留白
+        guard bounds.width > bounds.height else { return }
+        let buttons = subviews.compactMap { $0 as? UIButton }
+        guard !buttons.isEmpty else { return }
+        // 按 x 排序，取首键宽度为“一键宽”
+        let sorted = buttons.sorted { $0.frame.minX < $1.frame.minX }
+        guard let first = sorted.first, let last = sorted.last else { return }
+        let keyW = first.frame.width
+        guard keyW > 0 else { return }
+        // super 布局后首键在 x=2；移到 x=keyW（左留一键宽）
+        let shift = keyW - first.frame.minX
+        // 右端也要留出至少一键宽，否则不动（保底，避免溢出）
+        let lastRight = last.frame.maxX + shift
+        guard bounds.width - lastRight >= keyW - 1 else { return }
+        for b in buttons {
+            b.frame.origin.x += shift
+        }
+    }
+}
+
 /// 交互式 SSH 终端：PTY + xterm 仿真，可直接交互。
 ///
 /// - 打开即进入远端 login shell，cd/环境变量等状态保留，可 apt/yum 安装程序
@@ -252,6 +280,16 @@ private struct TerminalHostView: UIViewRepresentable {
         _ = TerminalKeyboardToggleSwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
+        // 终端快捷栏横屏留白：用 PaddedTerminalAccessory 替换 SwiftTerm 默认的
+        // TerminalAccessory（用户 2026-09-27：横屏第一排左右各空一键宽）。
+        // TerminalAccessory.init 会调 setupUI() 建好按钮；这里只需换掉实例并挂回 terminalView。
+        if let oldAccessory = tv.inputAccessoryView as? TerminalAccessory,
+           !(oldAccessory is PaddedTerminalAccessory) {
+            let padded = PaddedTerminalAccessory(
+                frame: oldAccessory.frame, inputViewStyle: .keyboard)
+            padded.terminalView = tv
+            tv.inputAccessoryView = padded
+        }
         let coordinator = context.coordinator
         tv.terminalDelegate = coordinator
         // Coordinator 是非隔离的（SwiftTerm 的 delegate 方法都是非隔离要求），
