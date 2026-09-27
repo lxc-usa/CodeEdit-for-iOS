@@ -2,24 +2,38 @@ import SwiftUI
 import SwiftTerm
 import ObjectiveC
 
-/// SwiftTerm TerminalAccessory 的横屏留白版。
+/// 对 TerminalAccessory.layoutSubviews 的一次方法交换（进程内只执行一次）。
 /// 用户 2026-09-27：终端窗口横屏时，键盘第一排（快捷栏）左右两头各空出一个按键的宽度。
-/// 做法：子类化 TerminalAccessory（public 非 open，可子类化），重写 layoutSubviews，
-/// 横屏时把整排按钮右移一个键宽（左留白），并保证右端也留出至少一个键宽。
-/// 竖屏保持 SwiftTerm 原样（从 x=2 开始排）。
-final class PaddedTerminalAccessory: TerminalAccessory {
-    public override func layoutSubviews() {
-        super.layoutSubviews()
+/// TerminalAccessory 是 public 非 open：不能子类化、不能重写方法，只能 swizzle
+/// （v21.5 CI 实测：subclass/override 直接编译失败）。
+/// 做法：先调原始布局，再把整排按钮右移一个键宽（左留白），并保证右端也留一键宽。
+/// 竖屏保持 SwiftTerm 原样。
+private enum TerminalAccessoryLayoutSwizzle {
+    static let apply: Void = {
+        let original = #selector(UIView.layoutSubviews)
+        let replacement = #selector(TerminalAccessory.codeEdit_paddedLayoutSubviews)
+        guard
+            let m1 = class_getInstanceMethod(TerminalAccessory.self, original),
+            let m2 = class_getInstanceMethod(TerminalAccessory.self, replacement)
+        else { return }
+        method_exchangeImplementations(m1, m2)
+    }()
+}
+
+extension TerminalAccessory {
+    /// 交换后的 layoutSubviews（SwiftTerm 原实现已与本方法交换实现）。
+    @objc func codeEdit_paddedLayoutSubviews() {
+        // 先走原始布局（交换后这个调用实际执行原始实现）
+        self.codeEdit_paddedLayoutSubviews()
         // 只在横屏加留白
         guard bounds.width > bounds.height else { return }
         let buttons = subviews.compactMap { $0 as? UIButton }
         guard !buttons.isEmpty else { return }
-        // 按 x 排序，取首键宽度为“一键宽”
         let sorted = buttons.sorted { $0.frame.minX < $1.frame.minX }
         guard let first = sorted.first, let last = sorted.last else { return }
         let keyW = first.frame.width
         guard keyW > 0 else { return }
-        // super 布局后首键在 x=2；移到 x=keyW（左留一键宽）
+        // 原始布局后首键在 x=2；移到 x=keyW（左留一键宽）
         let shift = keyW - first.frame.minX
         // 右端也要留出至少一键宽，否则不动（保底，避免溢出）
         let lastRight = last.frame.maxX + shift
@@ -280,16 +294,9 @@ private struct TerminalHostView: UIViewRepresentable {
         _ = TerminalKeyboardToggleSwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
-        // 终端快捷栏横屏留白：用 PaddedTerminalAccessory 替换 SwiftTerm 默认的
-        // TerminalAccessory（用户 2026-09-27：横屏第一排左右各空一键宽）。
-        // TerminalAccessory.init 会调 setupUI() 建好按钮；这里只需换掉实例并挂回 terminalView。
-        if let oldAccessory = tv.inputAccessoryView as? TerminalAccessory,
-           !(oldAccessory is PaddedTerminalAccessory) {
-            let padded = PaddedTerminalAccessory(
-                frame: oldAccessory.frame, inputViewStyle: .keyboard)
-            padded.terminalView = tv
-            tv.inputAccessoryView = padded
-        }
+        // 终端快捷栏横屏留白：对 TerminalAccessory.layoutSubviews 做方法交换
+        // （用户 2026-09-27：横屏第一排左右各空一键宽）。进程内只执行一次。
+        _ = TerminalAccessoryLayoutSwizzle.apply
         let coordinator = context.coordinator
         tv.terminalDelegate = coordinator
         // Coordinator 是非隔离的（SwiftTerm 的 delegate 方法都是非隔离要求），
