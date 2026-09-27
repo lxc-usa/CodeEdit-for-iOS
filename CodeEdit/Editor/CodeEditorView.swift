@@ -217,10 +217,10 @@ struct CodeEditorView: UIViewRepresentable {
                 } else if landscape {
                     // 横屏：键高 30pt、栏高 34pt 对标系统键盘
                     // （用户 2026-09-27 真机截图实测：键高 30pt、行距 34.4pt）；
-                    // 键宽压缩到 15 个键一屏排下、不横滑
-                    // （用户 2026-09-27：不要左右滑动），
-                    // 左右各留 20pt 空白（用户 2026-09-27：两头留点空白）。
-                    keyW = max(40, (bounds.width - 40 - 14 * 6) / 15)
+                    // 15 个键一屏排下不横滑，左右各空一个键宽
+                    // （用户 2026-09-27：不要左右滑动；两头至少空一个按键宽度）。
+                    // 15×键宽 + 14×6间隔 + 2×键宽(左右留白) = 17×键宽 + 84 = 屏宽。
+                    keyW = max(40, (bounds.width - 14 * 6) / 17)
                     keyH = 30; fontSize = 20
                 } else {
                     // 竖屏：14 符号键 + 隐藏键共 15 个，挤一挤全部显示，不横滑
@@ -258,7 +258,8 @@ struct CodeEditorView: UIViewRepresentable {
                 guard visibleW > 0, contentW > 0 else { return }
                 // 15 个键在 iPhone 上永远放得下：整组居中；
                 // 极窄屏幕兜底：放不下时左贴边横滑。
-                let targetSide: CGFloat = (!isPad && landscape) ? 20 : minSideInset
+                // 横屏左右留白 = 一个键宽（与上面键宽公式的 2×键宽对应）
+                let targetSide: CGFloat = (!isPad && landscape) ? keyW : minSideInset
                 let side: CGFloat
                 if contentW < visibleW {
                     side = max(targetSide, (visibleW - contentW) / 2)
@@ -288,10 +289,14 @@ struct CodeEditorView: UIViewRepresentable {
             let container = SymbolBarView()
             container.backgroundColor = .secondarySystemBackground
             // inputAccessoryView 用 frame 定高，宽度由系统拉伸；
-            // 初始 58pt（竖屏）；横屏时 layoutSubviews 在规格切换中一次性调到 34pt。
+            // 按创建时的方向定初始高度（横屏 34pt / 竖屏 58pt），
+            // 让系统一开始就按正确高度占位，背景条紧挨键盘顶边、中间不留空隙
+            // （用户 2026-09-27：背景条紧挨系统键盘顶边、间隔尽量小）。
             // 高度平时绝不在每轮布局里改，否则键盘占位和实际高度打架、
             // 底部漏出白条、甚至转屏冻住（v19 真机实测）。
-            container.frame = CGRect(x: 0, y: 0, width: 0, height: 58)
+            let screenBounds = UIScreen.main.bounds
+            let initialH: CGFloat = (screenBounds.width > screenBounds.height) ? 34 : 58
+            container.frame = CGRect(x: 0, y: 0, width: 0, height: initialH)
             container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
             // "隐藏键盘"按钮：样式与符号键一致，尺寸跟随键尺寸，排在最后。
