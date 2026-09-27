@@ -22,7 +22,8 @@ private enum TerminalAccessoryLayoutSwizzle {
 
 extension TerminalAccessory {
     /// 交换后的 layoutSubviews（SwiftTerm 原实现已与本方法交换实现）。
-    @objc func codeEdit_paddedLayoutSubviews() {
+    /// 必须 dynamic：否则 Swift 可能用静态派发，方法交换（ObjC 运行时层面）不生效。
+    @objc dynamic func codeEdit_paddedLayoutSubviews() {
         // 先走原始布局（交换后这个调用实际执行原始实现）
         self.codeEdit_paddedLayoutSubviews()
         // 只在横屏加留白；竖屏保持 SwiftTerm 原样
