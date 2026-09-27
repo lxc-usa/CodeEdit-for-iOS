@@ -112,6 +112,7 @@ struct SettingsView: View {
                             Text("\(servers.servers.count)")
                                 .foregroundStyle(.secondary)
                         }
+                        .foregroundStyle(.primary)
                     }
                 } header: {
                     Text("远程")
