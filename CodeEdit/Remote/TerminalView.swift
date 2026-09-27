@@ -2,6 +2,23 @@ import SwiftUI
 import SwiftTerm
 import ObjectiveC
 
+/// 终端快捷栏横屏留白：拦截 RotationSafeTerminalView.inputAccessoryView 的 getter。
+/// SwiftTerm 的 TerminalView 把 inputAccessoryView 标为 public 非 open，子类无法重写，
+/// 因此用方法交换在 getter 层面替换：横屏时返回装着 TerminalAccessory 的留白容器，
+/// 竖屏时返回原 accessory。进程内只执行一次。
+private enum TerminalInputAccessorySwizzle {
+    static let apply: Void = {
+        let original = #selector(getter: UIResponder.inputAccessoryView)
+        let replacement = #selector(RotationSafeTerminalView.codeEdit_inputAccessoryView)
+        guard
+            let m1 = class_getInstanceMethod(RotationSafeTerminalView.self, original),
+            let m2 = class_getInstanceMethod(RotationSafeTerminalView.self, replacement)
+        else { return }
+        method_exchangeImplementations(m1, m2)
+    }()
+}
+
+
 /// 交互式 SSH 终端：PTY + xterm 仿真，可直接交互。
 ///
 /// - 打开即进入远端 login shell，cd/环境变量等状态保留，可 apt/yum 安装程序
@@ -177,60 +194,55 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
 
     /// 找到真正的 TerminalAccessory（可能在留白容器里）。
     private var realTerminalAccessory: TerminalAccessory? {
-        if let a = super.inputAccessoryView as? TerminalAccessory {
+        // inputAccessoryView 已被交换：横屏返回容器，竖屏返回 accessory 本体。
+        let v = self.inputAccessoryView
+        if let a = v as? TerminalAccessory {
             return a
         }
-        if let container = paddedAccessoryContainer {
+        if let container = v as? TerminalAccessoryPaddingContainer {
             return container.subviews.first(where: { $0 is TerminalAccessory }) as? TerminalAccessory
         }
         return nil
     }
 
-    /// 横屏时返回带留白的容器，竖屏直接返回原 accessory。
-    override var inputAccessoryView: UIView? {
-        get {
-            guard let accessory = super.inputAccessoryView as? TerminalAccessory else {
-                return super.inputAccessoryView
-            }
-            // 判断横屏：iPhone 横屏时 verticalSizeClass 为 .compact
-            // （traitCollection 在 inputAccessoryView 查询时已可用）
-            let isLandscape = traitCollection.verticalSizeClass == .compact
-            guard isLandscape else {
-                // 竖屏：把 accessory 从容器里拿出来（如果之前装进去过），直接返回
-                if let container = paddedAccessoryContainer,
-                   container.superview == nil,
-                   accessory.superview === container {
-                    accessory.removeFromSuperview()
-                    accessory.frame = CGRect(x: 0, y: 0, width: container.bounds.width, height: 36)
-                }
-                return accessory
-            }
-            // 横屏：懒创建容器，把 accessory 装进去
-            let container: TerminalAccessoryPaddingContainer
-            if let existing = paddedAccessoryContainer {
-                container = existing
-            } else {
-                container = TerminalAccessoryPaddingContainer()
-                container.backgroundColor = accessory.backgroundColor
-                paddedAccessoryContainer = container
-            }
-            if accessory.superview !== container {
-                accessory.removeFromSuperview()
-                accessory.frame = CGRect(x: 0, y: 0, width: container.bounds.width, height: 36)
-                accessory.autoresizingMask = []
-                container.addSubview(accessory)
-            }
-            // 一键宽：取 accessory 里最左边按钮的宽度；取不到用 50
-            var pad: CGFloat = 50
-            let buttons = accessory.subviews.compactMap { $0 as? UIButton }
-            if let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }),
-               leftmost.frame.width > 0 {
-                pad = leftmost.frame.width
-            }
-            container.horizontalPadding = pad
-            container.setNeedsLayout()
-            return container
+    /// 交换后的 inputAccessoryView getter（SwiftTerm 原实现已与本方法交换）。
+    /// 必须 dynamic，确保走 ObjC 消息派发。
+    @objc dynamic var codeEdit_inputAccessoryView: UIView? {
+        // 先拿 SwiftTerm 原始 accessory（交换后这个调用实际执行原 getter）。
+        guard let accessory = self.codeEdit_inputAccessoryView as? TerminalAccessory else {
+            return self.codeEdit_inputAccessoryView
         }
+        let isLandscape = traitCollection.verticalSizeClass == .compact
+        guard isLandscape else {
+            if let container = paddedAccessoryContainer,
+               accessory.superview === container {
+                accessory.removeFromSuperview()
+                accessory.frame = CGRect(x: 0, y: 0, width: max(0, container.bounds.width), height: 36)
+            }
+            return accessory
+        }
+        let container: TerminalAccessoryPaddingContainer
+        if let existing = paddedAccessoryContainer {
+            container = existing
+        } else {
+            container = TerminalAccessoryPaddingContainer()
+            container.backgroundColor = accessory.backgroundColor
+            paddedAccessoryContainer = container
+        }
+        if accessory.superview !== container {
+            accessory.removeFromSuperview()
+            container.addSubview(accessory)
+        }
+        var pad: CGFloat = 50
+        let buttons = accessory.subviews.compactMap { $0 as? UIButton }
+        if let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }),
+           leftmost.frame.width > 0 {
+            pad = leftmost.frame.width
+        }
+        container.horizontalPadding = pad
+        container.setNeedsLayout()
+        container.layoutIfNeeded()
+        return container
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -350,6 +362,8 @@ private struct TerminalHostView: UIViewRepresentable {
         // （进程内只执行一次；TerminalKeyboardToggleSwizzle 定义见本文件）。
         // 之后键盘按钮的每次点按都先经过三段式状态机，不怕按钮被重建。
         _ = TerminalKeyboardToggleSwizzle.apply
+        // 终端快捷栏横屏留白：交换 inputAccessoryView getter（进程内只执行一次）。
+        _ = TerminalInputAccessorySwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
         let coordinator = context.coordinator
