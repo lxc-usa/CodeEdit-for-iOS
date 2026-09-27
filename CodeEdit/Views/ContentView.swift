@@ -48,7 +48,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(settings: settings)
+            SettingsView(settings: settings, workspace: workspace, servers: servers)
         }
     }
 
@@ -100,7 +100,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(settings: settings)
+            SettingsView(settings: settings, workspace: workspace, servers: servers)
         }
     }
 

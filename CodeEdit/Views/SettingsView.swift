@@ -1,9 +1,13 @@
 import SwiftUI
 
-/// 设置页：主题选择、编辑器选项、关于。
+/// 设置页：主题选择、编辑器选项、服务器管理、关于。
 struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var workspace: WorkspaceStore
+    @ObservedObject var servers: ServerStore
     @Environment(\.dismiss) private var dismiss
+
+    @State private var showServerManager = false
 
     var body: some View {
         NavigationStack {
@@ -99,6 +103,21 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button {
+                        showServerManager = true
+                    } label: {
+                        HStack {
+                            Text("管理服务器")
+                            Spacer()
+                            Text("\(servers.servers.count)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("远程")
+                }
+
+                Section {
                     HStack {
                         Text("版本")
                         Spacer()
@@ -118,6 +137,9 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button { dismiss() } label: { Text("完成") }
                 }
+            }
+            .sheet(isPresented: $showServerManager) {
+                ServerManagerView(workspace: workspace, servers: servers)
             }
         }
     }

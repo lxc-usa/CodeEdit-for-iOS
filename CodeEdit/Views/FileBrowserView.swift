@@ -16,7 +16,6 @@ struct FileBrowserView: View {
     @State private var showWorkspacePicker = false
     @State private var showRemoteFolderSheet = false
     @State private var showTerminalPicker = false
-    @State private var showServerManager = false
     @State private var namePrompt: NamePrompt?
     @State private var deleteItem: FileItem?
     @State private var showDeleteConfirm = false
@@ -117,9 +116,6 @@ struct FileBrowserView: View {
                 onOpenTerminal?(serverID)
             }
         }
-        .sheet(isPresented: $showServerManager) {
-            ServerManagerView(workspace: workspace, servers: servers)
-        }
         .alert(
             Text("提示"),
             isPresented: Binding(
@@ -184,11 +180,6 @@ struct FileBrowserView: View {
                 showTerminalPicker = true
             } label: {
                 Label("连接远程终端", systemImage: "terminal")
-            }
-            Button {
-                showServerManager = true
-            } label: {
-                Label("管理服务器…", systemImage: "gear")
             }
             if workspace.isRemoteWorkspace {
                 Divider()

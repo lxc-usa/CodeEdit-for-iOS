@@ -196,3 +196,5 @@
 "读取失败" = "Failed to Load";
 "移除此远程文件夹" = "Remove This Remote Folder";
 "服务器已删除" = "Server Deleted";
+"管理服务器" = "Manage Servers";
+"远程" = "Remote";
