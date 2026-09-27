@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>CodeEdit for iOS</string>
+	<string>CodeEdit</string>
 	<key>CFBundleName</key>
 	<string>CodeEdit</string>
 	<key>CFBundleShortVersionString</key>

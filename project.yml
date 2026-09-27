@@ -42,7 +42,7 @@ targets:
     info:
       path: CodeEdit/Info.plist
       properties:
-        CFBundleDisplayName: CodeEdit for iOS
+        CFBundleDisplayName: CodeEdit
         CFBundleName: CodeEdit
         CFBundleShortVersionString: "1.0"
         CFBundleVersion: "1"

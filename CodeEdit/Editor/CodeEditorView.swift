@@ -217,9 +217,10 @@ struct CodeEditorView: UIViewRepresentable {
                 } else if landscape {
                     // 横屏：键高 30pt、栏高 34pt 对标系统键盘
                     // （用户 2026-09-27 真机截图实测：键高 30pt、行距 34.4pt）；
-                    // 键宽则压缩到 15 个键一屏排下、不横滑
-                    // （用户 2026-09-27：不要左右滑动）。
-                    keyW = max(40, (bounds.width - 16 - 14 * 6) / 15)
+                    // 键宽压缩到 15 个键一屏排下、不横滑
+                    // （用户 2026-09-27：不要左右滑动），
+                    // 左右各留 20pt 空白（用户 2026-09-27：两头留点空白）。
+                    keyW = max(40, (bounds.width - 40 - 14 * 6) / 15)
                     keyH = 30; fontSize = 20
                 } else {
                     // 竖屏：14 符号键 + 隐藏键共 15 个，挤一挤全部显示，不横滑
@@ -257,11 +258,12 @@ struct CodeEditorView: UIViewRepresentable {
                 guard visibleW > 0, contentW > 0 else { return }
                 // 15 个键在 iPhone 上永远放得下：整组居中；
                 // 极窄屏幕兜底：放不下时左贴边横滑。
+                let targetSide: CGFloat = (!isPad && landscape) ? 20 : minSideInset
                 let side: CGFloat
                 if contentW < visibleW {
-                    side = max(minSideInset, (visibleW - contentW) / 2)
+                    side = max(targetSide, (visibleW - contentW) / 2)
                 } else {
-                    side = minSideInset
+                    side = targetSide
                 }
                 let inset = UIEdgeInsets(top: 0, left: side, bottom: 0, right: side)
                 // 只在变化时改，避免布局循环
