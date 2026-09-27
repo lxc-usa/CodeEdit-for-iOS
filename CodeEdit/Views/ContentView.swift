@@ -33,19 +33,15 @@ struct ContentView: View {
 
     private var splitLayout: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            FileBrowserView(workspace: workspace, servers: servers, onOpenTerminal: openTerminal)
+            FileBrowserView(
+                workspace: workspace,
+                servers: servers,
+                onOpenTerminal: openTerminal,
+                onOpenSettings: { showSettings = true }
+            )
         } detail: {
             EditorAreaView(workspace: workspace, settings: settings, servers: servers)
                 .navigationBarTitleDisplayMode(.inline)
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    showSettings = true
-                } label: {
-                    Label("设置", systemImage: "gear")
-                }
-            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: settings, workspace: workspace, servers: servers)
@@ -67,13 +63,6 @@ struct ContentView: View {
                             Label("文件", systemImage: "sidebar.leading")
                         }
                     }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Label("设置", systemImage: "gear")
-                        }
-                    }
                 }
         }
         .overlay {
@@ -91,6 +80,8 @@ struct ContentView: View {
                         } onOpenTerminal: { serverID in
                             withAnimation(.easeInOut(duration: 0.25)) { showDrawer = false }
                             openTerminal(serverID: serverID)
+                        } onOpenSettings: {
+                            showSettings = true
                         }
                     }
                     .frame(width: 300)

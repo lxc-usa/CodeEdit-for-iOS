@@ -12,6 +12,8 @@ struct FileBrowserView: View {
     @ObservedObject var servers: ServerStore
     var onOpenFile: (() -> Void)? = nil
     var onOpenTerminal: ((UUID) -> Void)? = nil
+    /// 抽屉菜单里的"设置"入口：交由 ContentView 弹出设置页。
+    var onOpenSettings: (() -> Void)? = nil
 
     @State private var showWorkspacePicker = false
     @State private var showRemoteFolderSheet = false
@@ -180,6 +182,12 @@ struct FileBrowserView: View {
                 showTerminalPicker = true
             } label: {
                 Label("连接远程终端", systemImage: "terminal")
+            }
+            Divider()
+            Button {
+                onOpenSettings?()
+            } label: {
+                Label("设置", systemImage: "gear")
             }
             if workspace.isRemoteWorkspace {
                 Divider()

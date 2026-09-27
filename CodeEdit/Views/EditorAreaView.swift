@@ -58,13 +58,7 @@ struct EditorAreaView: View {
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    hideKeyboard()
-                } label: {
-                    Label("隐藏键盘", systemImage: "keyboard.chevron.compact.down")
-                }
-                .disabled(workspace.selectedDocument == nil && workspace.selectedTerminal == nil)
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     findController.presentFind()
                 } label: {
@@ -106,17 +100,7 @@ struct EditorAreaView: View {
         }
     }
 
-    /// 收起键盘：编辑器与终端通用。
-    /// 终端侧同时置位抑制标记——否则远端每来一次输出、每次 updateUIView
-    /// 都会把键盘再顶出来；点终端视图任意处或切标签时恢复（见 TerminalHostView）。
-    private func hideKeyboard() {
-        if workspace.selectedTerminal != nil {
-            workspace.isTerminalKeyboardSuppressed = true
-        }
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
-        )
-    }
+    // MARK: - 标签页条
 
     /// 保证当前标签（文档或终端）始终处在可见区域（同 openCoder 的处理）。
     /// 用 Task 跳一拍：刚打开标签时新标签还没完成布局，直接 scrollTo 会滚不到。

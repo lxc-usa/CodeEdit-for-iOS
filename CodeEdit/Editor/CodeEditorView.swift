@@ -176,6 +176,17 @@ struct CodeEditorView: UIViewRepresentable {
             container.frame = CGRect(x: 0, y: 0, width: 0, height: 46)
             container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
+            // 右侧固定的"隐藏键盘"按钮：不随符号行滚动，常驻可点
+            let hideButton = UIButton(type: .system)
+            hideButton.setImage(UIImage(systemName: "keyboard.chevron.compact.down"), for: .normal)
+            hideButton.tintColor = .label
+            hideButton.backgroundColor = .tertiarySystemBackground
+            hideButton.layer.cornerRadius = 6
+            hideButton.accessibilityLabel = NSLocalizedString("隐藏键盘", comment: "Hide keyboard button on the editor symbol bar")
+            hideButton.addTarget(self, action: #selector(hideKeyboardTapped), for: .touchUpInside)
+            hideButton.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(hideButton)
+
             let scrollView = UIScrollView()
             scrollView.showsHorizontalScrollIndicator = false
             scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -188,9 +199,10 @@ struct CodeEditorView: UIViewRepresentable {
             stack.translatesAutoresizingMaskIntoConstraints = false
             scrollView.addSubview(stack)
 
-            let symbols = ["⇥", "{", "}", "(", ")", "[", "]", ";", ":", "=",
-                           "\"", "'", "<", ">", "/", "\\", "|", ".", ",",
-                           "+", "-", "*", "_", "#", "$", "!", "?", "&"]
+            // 符号快捷键：只放系统英文 123 首屏没有的符号，避免重复。
+            // 系统首屏已有：- / : ; ( ) $ & @ " . , ? ! ' —— 这里不再放。
+            let symbols = ["⇥", "{", "}", "[", "]", "=", "<", ">", "\\", "|",
+                           "+", "*", "_", "#"]
             for symbol in symbols {
                 let button = UIButton(type: .system)
                 button.setTitle(symbol, for: .normal)
@@ -204,8 +216,13 @@ struct CodeEditorView: UIViewRepresentable {
             }
 
             NSLayoutConstraint.activate([
+                hideButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+                hideButton.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                hideButton.widthAnchor.constraint(equalToConstant: 36),
+                hideButton.heightAnchor.constraint(equalToConstant: 34),
+
                 scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                scrollView.trailingAnchor.constraint(equalTo: hideButton.leadingAnchor, constant: -8),
                 scrollView.topAnchor.constraint(equalTo: container.topAnchor),
                 scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
@@ -242,6 +259,11 @@ struct CodeEditorView: UIViewRepresentable {
             } else {
                 tv.insertText(symbol)
             }
+        }
+
+        /// 符号栏右侧"隐藏键盘"按钮：收起键盘（编辑器侧无自动重弹逻辑，直接 resign 即可）。
+        @objc private func hideKeyboardTapped() {
+            textView?.resignFirstResponder()
         }
     }
 }
