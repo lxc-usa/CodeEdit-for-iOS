@@ -2,21 +2,8 @@ import SwiftUI
 import SwiftTerm
 import ObjectiveC
 
-/// 终端快捷栏横屏留白：拦截 RotationSafeTerminalView.inputAccessoryView 的 getter。
-/// SwiftTerm 的 TerminalView 把 inputAccessoryView 标为 public 非 open，子类无法重写，
-/// 因此用方法交换在 getter 层面替换：横屏时返回装着 TerminalAccessory 的留白容器，
-/// 竖屏时返回原 accessory。进程内只执行一次。
-private enum TerminalInputAccessorySwizzle {
-    static let apply: Void = {
-        let original = #selector(getter: UIResponder.inputAccessoryView)
-        let replacement = #selector(getter: RotationSafeTerminalView.codeEdit_inputAccessoryView)
-        guard
-            let m1 = class_getInstanceMethod(RotationSafeTerminalView.self, original),
-            let m2 = class_getInstanceMethod(RotationSafeTerminalView.self, replacement)
-        else { return }
-        method_exchangeImplementations(m1, m2)
-    }()
-}
+/// 终端 accessory 留白调整标记（associated object key）。
+private var AccessoryPaddingAdjustedKey: UInt8 = 0
 
 
 /// 交互式 SSH 终端：PTY + xterm 仿真，可直接交互。
@@ -140,45 +127,6 @@ struct TerminalView: View {
 /// 不管按钮被重建多少次，点按永远先经过三段式状态机；"正常→半高"这半件事仍
 /// 调回 SwiftTerm 原实现（交换后改名）。该方法全库只被键盘按钮调用，无内部
 /// 直调，交换安全。
-/// 终端快捷栏横屏留白容器。
-/// 用户 2026-09-27：终端窗口横屏时，键盘第一排（快捷栏）左右两头各空出一个按键的宽度。
-/// 做法：把 SwiftTerm 的 TerminalAccessory 装进这个容器，横屏时左右各留一键宽；
-/// 竖屏时留白为 0，恢复原样。容器负责在 layout 时按当前方向调整 accessory 的 frame。
-private final class TerminalAccessoryPaddingContainer: UIInputView {
-    /// 横屏留白宽度（约一键宽）；竖屏为 0。
-    var horizontalPadding: CGFloat = 0 {
-        didSet {
-            if horizontalPadding != oldValue {
-                setNeedsLayout()
-            }
-        }
-    }
-
-    init() {
-        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: 36), inputViewStyle: .keyboard)
-        autoresizingMask = [.flexibleWidth]
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // 把里面的 TerminalAccessory 按留白定位
-        for subview in subviews {
-            if subview is TerminalAccessory {
-                subview.frame = CGRect(
-                    x: horizontalPadding,
-                    y: 0,
-                    width: max(0, bounds.width - 2 * horizontalPadding),
-                    height: bounds.height
-                )
-            }
-        }
-    }
-}
-
 @MainActor
 private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     /// 终端键盘三段式当前所处阶段。
@@ -189,60 +137,56 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     /// 三段式状态机需要读写键盘抑制标记，弱引用避免循环。
     weak var stageWorkspace: WorkspaceStore?
 
-    /// 终端快捷栏横屏留白容器（懒创建，把 TerminalAccessory 装进去）。
-    private var paddedAccessoryContainer: TerminalAccessoryPaddingContainer?
-
-    /// 找到真正的 TerminalAccessory（可能在留白容器里）。
-    private var realTerminalAccessory: TerminalAccessory? {
-        // inputAccessoryView 已被交换：横屏返回容器，竖屏返回 accessory 本体。
-        let v = self.inputAccessoryView
-        if let a = v as? TerminalAccessory {
-            return a
-        }
-        if let container = v as? TerminalAccessoryPaddingContainer {
-            return container.subviews.first(where: { $0 is TerminalAccessory }) as? TerminalAccessory
-        }
-        return nil
+    /// 终端快捷栏横屏留白（用户 2026-09-27：左右各空一键宽）。
+    /// 在 TerminalView 布局后调整 accessory 的按钮：左组右移、右组左移。
+    /// 不碰 SwiftTerm 内部，只在外层调 frame，安全。
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        adjustTerminalAccessoryPadding()
     }
 
-    /// 交换后的 inputAccessoryView getter（SwiftTerm 原实现已与本方法交换）。
-    /// 必须 dynamic，确保走 ObjC 消息派发。
-    @objc dynamic var codeEdit_inputAccessoryView: UIView? {
-        // 先拿 SwiftTerm 原始 accessory（交换后这个调用实际执行原 getter）。
-        guard let accessory = self.codeEdit_inputAccessoryView as? TerminalAccessory else {
-            return self.codeEdit_inputAccessoryView
-        }
-        let isLandscape = traitCollection.verticalSizeClass == .compact
-        guard isLandscape else {
-            if let container = paddedAccessoryContainer,
-               accessory.superview === container {
-                accessory.removeFromSuperview()
-                accessory.frame = CGRect(x: 0, y: 0, width: max(0, container.bounds.width), height: 36)
-            }
-            return accessory
-        }
-        let container: TerminalAccessoryPaddingContainer
-        if let existing = paddedAccessoryContainer {
-            container = existing
-        } else {
-            container = TerminalAccessoryPaddingContainer()
-            container.backgroundColor = accessory.backgroundColor
-            paddedAccessoryContainer = container
-        }
-        if accessory.superview !== container {
-            accessory.removeFromSuperview()
-            container.addSubview(accessory)
-        }
-        var pad: CGFloat = 50
+    private func adjustTerminalAccessoryPadding() {
+        guard let accessory = inputAccessoryView as? TerminalAccessory else { return }
+        // 只在横屏加留白
+        guard traitCollection.verticalSizeClass == .compact else { return }
+        // 确保 accessory 已布局
+        accessory.layoutIfNeeded()
+        guard accessory.bounds.width > accessory.bounds.height else { return }
+
         let buttons = accessory.subviews.compactMap { $0 as? UIButton }
-        if let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }),
-           leftmost.frame.width > 0 {
-            pad = leftmost.frame.width
+        guard !buttons.isEmpty else { return }
+        // 避免重复调整：用关联标记记录已调整过的宽度
+        let widthKey = accessory.bounds.width
+        if let lastWidth = objc_getAssociatedObject(accessory, &AccessoryPaddingAdjustedKey) as? CGFloat,
+           lastWidth == widthKey {
+            return
         }
-        container.horizontalPadding = pad
-        container.setNeedsLayout()
-        container.layoutIfNeeded()
-        return container
+
+        guard let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }) else { return }
+        let keyW = leftmost.frame.width
+        guard keyW > 0 else { return }
+        let shift = keyW - 2
+        guard shift > 0 else { return }
+
+        let midX = accessory.bounds.width / 2
+        var leftMaxX: CGFloat = 0
+        var rightMinX: CGFloat = accessory.bounds.width
+        for b in buttons {
+            if b.frame.minX < midX {
+                b.frame.origin.x += shift
+                leftMaxX = max(leftMaxX, b.frame.maxX)
+            } else {
+                b.frame.origin.x -= shift
+                rightMinX = min(rightMinX, b.frame.minX)
+            }
+        }
+        // 重叠则回退：重新布局恢复原状
+        if leftMaxX > rightMinX {
+            accessory.setNeedsLayout()
+            accessory.layoutIfNeeded()
+            return
+        }
+        objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -254,7 +198,9 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
         // 等一帧，让旋转动画先更新 accessory 的 bounds，再按最终宽度重建
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if let accessory = self.realTerminalAccessory {
+            if let accessory = self.inputAccessoryView as? TerminalAccessory {
+                // 清除留白标记，setupUI 重建按钮后按新宽度重新调整
+                objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                 accessory.setupUI()
                 accessory.setNeedsLayout()
                 accessory.layoutIfNeeded()
@@ -362,8 +308,6 @@ private struct TerminalHostView: UIViewRepresentable {
         // （进程内只执行一次；TerminalKeyboardToggleSwizzle 定义见本文件）。
         // 之后键盘按钮的每次点按都先经过三段式状态机，不怕按钮被重建。
         _ = TerminalKeyboardToggleSwizzle.apply
-        // 终端快捷栏横屏留白：交换 inputAccessoryView getter（进程内只执行一次）。
-        _ = TerminalInputAccessorySwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
         let coordinator = context.coordinator
