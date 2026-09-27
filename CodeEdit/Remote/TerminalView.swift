@@ -284,7 +284,7 @@ private struct TerminalHostView: UIViewRepresentable {
             tv.feed(byteArray: ArraySlice(bytes))
         }
         // 顶部栏自动显隐：上滑隐藏、下滑显示（只响应用户手势，且只响应当前选中的标签）
-        let topBarTracker = TopBarScrollTracker(workspace: workspace)
+        let topBarTracker = TopBarScrollTracker(workspace: workspace, settings: settings)
         context.coordinator.topBarTracker = topBarTracker
         context.coordinator.isActive = isActive
         context.coordinator.scrollObservation = tv.observe(\.contentOffset, options: [.new]) { [weak coordinator] scrollView, _ in

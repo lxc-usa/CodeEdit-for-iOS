@@ -18,6 +18,7 @@ import UIKit
 /// 因此加两道闸：旋转期间直接忽略滚动事件；每次真正应用显隐变化后冷却 0.5 秒。
 final class TopBarScrollTracker {
     private weak var workspace: WorkspaceStore?
+    private weak var settings: SettingsStore?
     private var lastY: CGFloat = 0
     private var accumulator: CGFloat = 0
     /// 累积位移阈值：慢速拖动也能触发，避免逐帧抖动
@@ -33,8 +34,9 @@ final class TopBarScrollTracker {
     private var orientationObserver: NSObjectProtocol?
     /// 上次见到的滚动区 bounds 尺寸：旋转/键盘升降/分屏会改变它，普通滚动不会。
 
-    init(workspace: WorkspaceStore) {
+    init(workspace: WorkspaceStore, settings: SettingsStore? = nil) {
         self.workspace = workspace
+        self.settings = settings
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         orientationObserver = NotificationCenter.default.addObserver(
             forName: UIDevice.orientationDidChangeNotification,
@@ -60,6 +62,11 @@ final class TopBarScrollTracker {
 
     /// 在 UIScrollView.contentOffset 的 KVO 回调里调用（主线程）。
     func handleScroll(_ scrollView: UIScrollView) {
+        // 开关关闭：顶部栏常显，不跟踪
+        if let settings, !settings.autoHideTopBars {
+            setHidden(false)
+            return
+        }
         let y = scrollView.contentOffset.y
         // bounds 尺寸突变 = 旋转 / 键盘升降 / 分屏变化：这是同步的、
         // 不会漏的"布局剧变"信号，不依赖 UIDevice 方向通知（可能迟到或不来）。

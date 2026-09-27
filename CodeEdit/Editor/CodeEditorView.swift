@@ -80,7 +80,7 @@ struct CodeEditorView: UIViewRepresentable {
         coordinator.loadInitialText()
 
         // 顶部栏自动显隐：上滑隐藏、下滑显示（只响应用户手势）
-        let topBarTracker = TopBarScrollTracker(workspace: workspace)
+        let topBarTracker = TopBarScrollTracker(workspace: workspace, settings: settings)
         coordinator.topBarTracker = topBarTracker
         coordinator.scrollObservation = tv.observe(\.contentOffset, options: [.new]) { [weak coordinator] scrollView, _ in
             coordinator?.topBarTracker?.handleScroll(scrollView)

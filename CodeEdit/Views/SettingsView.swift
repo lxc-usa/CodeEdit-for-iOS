@@ -103,6 +103,25 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle(isOn: $settings.autoHideTopBars) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("滚动时自动隐藏顶栏")
+                            Text("上滑隐藏、下滑显示；关闭后顶栏常显")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: settings.autoHideTopBars) { _, enabled in
+                        // 关闭时立即恢复顶栏显示
+                        if !enabled {
+                            workspace.setTopBarsHidden(false)
+                        }
+                    }
+                } header: {
+                    Text("界面")
+                }
+
+                Section {
                     Button {
                         showServerManager = true
                     } label: {

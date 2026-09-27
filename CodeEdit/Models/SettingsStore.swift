@@ -29,6 +29,10 @@ final class SettingsStore: ObservableObject {
     @Published var showInvisibles: Bool {
         didSet { UserDefaults.standard.set(showInvisibles, forKey: "codeedit.showInvisibles") }
     }
+    /// 顶部栏自动显隐：上滑隐藏、下滑显示。关掉则顶部栏常显。
+    @Published var autoHideTopBars: Bool {
+        didSet { UserDefaults.standard.set(autoHideTopBars, forKey: "codeedit.autoHideTopBars") }
+    }
     // MARK: - 等宽字体（编辑器与远程终端共用同一套）
     /// 等宽字体：编辑器与远程终端共用。
     @Published var monoFont: MonoFont {
@@ -47,6 +51,7 @@ final class SettingsStore: ObservableObject {
         let savedTabWidth = defaults.double(forKey: "codeedit.tabWidth")
         tabWidth = savedTabWidth > 0 ? savedTabWidth : 4
         showInvisibles = defaults.object(forKey: "codeedit.showInvisibles") as? Bool ?? false
+        autoHideTopBars = defaults.object(forKey: "codeedit.autoHideTopBars") as? Bool ?? true
         monoFont = MonoFont(rawValue: defaults.string(forKey: "codeedit.monoFont") ?? "") ?? .sfMono
     }
 }
