@@ -112,11 +112,16 @@ struct TerminalView: View {
 /// 内部布局不一致，导致第一行键（esc/ctrl/方向键…）与系统键盘之间留白。
 /// 这里在尺寸类型真的变化后，强制重建 accessory 并让键盘重新加载输入视图。
 ///
-/// 三段式实现说明：TerminalAccessory 是 public 非 open，无法继承重写；
-/// KeyboardView 也是内部类，外部建不出来。所以找到 accessory 上那个
-/// action 为 toggleInputKeyboard 的原生键盘按钮，把它的 target 换成我们的
-/// Coordinator（接管点击），"正常→半高"这半件事仍用 perform 调回 SwiftTerm
-/// 自己的实现来做。setupUI()（旋转时）会重建按钮，用实例标识做幂等自愈。
+/// 三段式实现说明（v14，方法交换）：TerminalAccessory 是 public 非 open，
+/// 无法继承重写；KeyboardView 也是内部类，外部建不出来。v13 曾尝试"找到原生
+/// 键盘按钮、把它的 target 换成我们"，但真机实锤失败——TerminalAccessory 的
+/// bounds.didSet 每次都会调 setupUI() 把全部按钮销毁重建（键盘弹出、正常↔半高
+/// 切换都会触发），一次性的 target 接管在重建后就被抹掉，第二次点按回到原生
+/// 两段切换，隐藏阶段永远到不了。
+/// v14 改为对 toggleInputKeyboard: 做一次 ObjC 方法交换，在方法层面拦截：
+/// 不管按钮被重建多少次，点按永远先经过三段式状态机；"正常→半高"这半件事仍
+/// 调回 SwiftTerm 原实现（交换后改名）。该方法全库只被键盘按钮调用，无内部
+/// 直调，交换安全。
 @MainActor
 private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     /// 终端键盘三段式当前所处阶段。
@@ -124,10 +129,8 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
         case normal, half, hidden
     }
     var keyboardStage: KeyboardStage = .normal
-    /// 三段式按钮的点击处理（Coordinator）：旋转重建按钮后需要它重新接管。
-    weak var stageCoordinator: TerminalHostView.Coordinator?
-    /// 已被我们接管的按钮实例：setupUI 重建后实例变化，触发重新接管。
-    private weak var retargetedButton: UIButton?
+    /// 三段式状态机需要读写键盘抑制标记，弱引用避免循环。
+    weak var stageWorkspace: WorkspaceStore?
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
@@ -144,39 +147,40 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
                 accessory.layoutIfNeeded()
             }
             self.reloadInputViews()
-            // setupUI 重建了按钮：重新接管三段式（已在主线程，直接 assume）
-            MainActor.assumeIsolated {
-                self.ensureKeyboardStageRetarget()
-            }
+            // 三段式在方法层面拦截（方法交换），按钮重建不影响，无需重新接管。
         }
     }
 
-    /// 键盘按钮三段式循环：正常 → 半高 → 隐藏 →（点终端任意处回到）正常。
+    /// 键盘按钮三段式循环（由交换后的 toggleInputKeyboard: 驱动）：
+    /// 正常 → 半高 → 隐藏 →（点终端任意处回到）正常。
     /// 注意隐藏后整个键盘（含快捷栏和这个按钮）都会收起，回来靠点终端视图
     /// （解除抑制、弹回键盘，见 updateUIView 的阶段同步）。
-    func cycleKeyboardStage(button: UIButton, workspace: WorkspaceStore) {
+    func cycleKeyboardStageFromButton(sender: UIButton, accessory: TerminalAccessory) {
         switch keyboardStage {
         case .normal:
-            // 半高：委托 SwiftTerm 自己的 toggle 切出自绘紧凑键盘，成功才进 half。
-            if invokeSwiftTermKeyboardToggle(sender: button) {
-                keyboardStage = .half
+            // 半高：调 SwiftTerm 原实现切出自绘紧凑键盘（原实现已与
+            // codeEdit_keyboardStageToggle 交换实现，直接调即执行原逻辑）。
+            keyboardStage = .half
+            UIView.performWithoutAnimation {
+                accessory.codeEdit_keyboardStageToggle(sender)
             }
         case .half:
             // 隐藏：先把 inputView 复位（下次回到正常时是系统键盘），
-            // 再走与导航栏"隐藏键盘"同一套抑制逻辑，避免远端输出把键盘顶回来。
+            // 再走与"隐藏键盘"同一套抑制逻辑，避免远端输出把键盘顶回来。
             keyboardStage = .hidden
             inputView = nil
-            workspace.isTerminalKeyboardSuppressed = true
+            stageWorkspace?.isTerminalKeyboardSuppressed = true
             resignFirstResponder()
         case .hidden:
+            // 隐藏时按钮随键盘一起收起，正常点不到；防御性回到正常。
             keyboardStage = .normal
-            workspace.isTerminalKeyboardSuppressed = false
+            stageWorkspace?.isTerminalKeyboardSuppressed = false
             inputView = nil
             if !isFirstResponder {
                 becomeFirstResponder()
             }
         }
-        updateKeyboardStageIcon(button)
+        updateKeyboardStageIcon(sender)
     }
 
     /// 按当前阶段刷新键盘按钮图标。
@@ -194,57 +198,37 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
         }
         button.setImage(UIImage(systemName: name), for: .normal)
     }
+}
 
-    /// 确保 SwiftTerm 的原生键盘按钮被我们接管（幂等；重建后自动重新接管）。
-    /// 找不到按钮（SwiftTerm 改版）时静默放弃，原生两段切换继续可用。
-    func ensureKeyboardStageRetarget() {
-        guard let coordinator = stageCoordinator,
-              let accessory = inputAccessoryView else { return }
-        guard let button = Self.swiftTermKeyboardButton(in: accessory) else { return }
-        if retargetedButton === button {
-            // 已接管：只刷新图标（阶段可能被外部手势同步，如点终端回来）
-            updateKeyboardStageIcon(button)
-            return
-        }
-        let sel = NSSelectorFromString("toggleInputKeyboard:")
-        button.removeTarget(accessory, action: sel, for: .touchDown)
-        button.addTarget(coordinator, action: #selector(TerminalHostView.Coordinator.keyboardStageTapped(_:)), for: .touchDown)
-        retargetedButton = button
-        updateKeyboardStageIcon(button)
-    }
+/// 对 TerminalAccessory.toggleInputKeyboard: 的一次方法交换（进程内只执行一次）。
+/// v13 的 target 接管会被 setupUI() 的按钮重建抹掉；方法交换在方法层面拦截，
+/// 重建多少次都不影响。
+private enum TerminalKeyboardToggleSwizzle {
+    static let apply: Void = {
+        // toggleInputKeyboard 在 SwiftTerm 内是 internal，只能用字符串 selector。
+        let original = Selector("toggleInputKeyboard:")
+        let replacement = #selector(TerminalAccessory.codeEdit_keyboardStageToggle(_:))
+        guard
+            let m1 = class_getInstanceMethod(TerminalAccessory.self, original),
+            let m2 = class_getInstanceMethod(TerminalAccessory.self, replacement)
+        else { return }
+        method_exchangeImplementations(m1, m2)
+    }()
+}
 
-    /// 在 accessory 层级里找 SwiftTerm 的原生键盘按钮：
-    /// 以 accessory 为 target、action 为 toggleInputKeyboard: 的那个 UIButton。
-    /// 注意 SwiftTerm 用的是 .touchDown（按下即触发），不是 .touchUpInside。
-    private static func swiftTermKeyboardButton(in accessory: UIView) -> UIButton? {
-        var stack: [UIView] = [accessory]
-        while let view = stack.popLast() {
-            if let button = view as? UIButton {
-                let aimedAtAccessory = button.allTargets.contains {
-                    ($0.base as AnyObject) === (accessory as AnyObject)
-                }
-                let actions = button.actions(forTarget: accessory, forControlEvent: .touchDown) ?? []
-                if aimedAtAccessory && actions.contains("toggleInputKeyboard:") {
-                    return button
-                }
+extension TerminalAccessory {
+    /// 交换后的 toggleInputKeyboard:（SwiftTerm 原实现已与本方法交换实现）。
+    /// 是 CodeEdit 的终端视图 → 走三段式状态机；否则调回原实现（防御）。
+    @objc func codeEdit_keyboardStageToggle(_ sender: UIButton) {
+        // 本方法只会被键盘按钮的 .touchDown action 调用，恒在主线程。
+        MainActor.assumeIsolated {
+            guard let tv = self.terminalView as? RotationSafeTerminalView else {
+                // 非 CodeEdit 终端视图：执行 SwiftTerm 原实现。
+                self.codeEdit_keyboardStageToggle(sender)
+                return
             }
-            stack.append(contentsOf: view.subviews)
+            tv.cycleKeyboardStageFromButton(sender: sender, accessory: self)
         }
-        return nil
-    }
-
-    /// 直接调用 SwiftTerm TerminalAccessory 的 toggleInputKeyboard:，
-    /// 在"正常"和"半高"之间切换（它内部负责创建 KeyboardView）。
-    /// - Returns: 是否成功调用（accessory 不存在或改版时返回 false）。
-    private func invokeSwiftTermKeyboardToggle(sender: UIButton) -> Bool {
-        guard let accessory = inputAccessoryView else { return false }
-        let sel = NSSelectorFromString("toggleInputKeyboard:")
-        let target = accessory as NSObject
-        guard target.responds(to: sel) else { return false }
-        UIView.performWithoutAnimation {
-            _ = target.perform(sel, with: sender)
-        }
-        return true
     }
 }
 
@@ -261,6 +245,10 @@ private struct TerminalHostView: UIViewRepresentable {
     var isActive: Bool
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
+        // 三段式键盘：对 SwiftTerm 的 toggleInputKeyboard: 做一次方法交换
+        // （进程内只执行一次；TerminalKeyboardToggleSwizzle 定义见本文件）。
+        // 之后键盘按钮的每次点按都先经过三段式状态机，不怕按钮被重建。
+        _ = TerminalKeyboardToggleSwizzle.apply
         let tv = RotationSafeTerminalView(frame: .zero, font: terminalUIFont())
         applyAppearance(to: tv)
         tv.terminalDelegate = context.coordinator
@@ -276,15 +264,9 @@ private struct TerminalHostView: UIViewRepresentable {
         }
         context.coordinator.onSend = onSend
         context.coordinator.onResize = onResize
-        // 三段式键盘按钮：把 SwiftTerm 原生按钮的点击接管为 正常→半高→隐藏 循环。
-        // Coordinator 非隔离，只做转发；真正的状态机在 @MainActor 的 view 上。
-        tv.stageCoordinator = context.coordinator
-        context.coordinator.onKeyboardStageTap = { [weak tv, weak workspace] button in
-            Task { @MainActor in
-                guard let tv, let workspace else { return }
-                tv.cycleKeyboardStage(button: button, workspace: workspace)
-            }
-        }
+        // 三段式键盘的状态机由方法交换驱动（见 TerminalKeyboardToggleSwizzle），
+        // 这里只需要给 view 一个写抑制标记的弱引用。
+        tv.stageWorkspace = workspace
         // 点终端任意处 = 重新获得输入意图：解除"隐藏键盘"抑制，弹回键盘。
         // 手势不吞事件（cancelsTouchesInView=false），不影响 SwiftTerm 自己的
         // 点选/滚动处理。
@@ -328,12 +310,11 @@ private struct TerminalHostView: UIViewRepresentable {
             tv.resignFirstResponder()
         }
         // 三段式阶段同步：外部手势（点终端任意处解除抑制、切标签）把键盘叫回来后，
-        // 阶段回到正常；同时确保 SwiftTerm 键盘按钮被我们接管（旋转重建后自愈）。
+        // 阶段回到正常。按钮点按本身由方法交换驱动，这里不再需要接管。
         if let rtv = tv as? RotationSafeTerminalView {
             if rtv.keyboardStage == .hidden && !workspace.isTerminalKeyboardSuppressed {
                 rtv.keyboardStage = .normal
             }
-            rtv.ensureKeyboardStageRetarget()
         }
     }
 
@@ -359,17 +340,10 @@ private struct TerminalHostView: UIViewRepresentable {
         var onSend: (([UInt8]) -> Void)?
         var onResize: ((Int, Int) -> Void)?
         var onTap: (() -> Void)?
-        /// 三段式键盘按钮被点击（已接管 SwiftTerm 原生按钮）。
-        var onKeyboardStageTap: ((UIButton) -> Void)?
 
         /// 用户点终端视图：恢复输入意图（解除键盘抑制）。
         @objc func handleTap() {
             onTap?()
-        }
-
-        /// SwiftTerm 原生键盘按钮（已由 ensureKeyboardStageRetarget 接管）。
-        @objc func keyboardStageTapped(_ sender: UIButton) {
-            onKeyboardStageTap?(sender)
         }
 
         /// 用户按键 → SSH 通道。

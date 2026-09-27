@@ -43,10 +43,4 @@ final class SFTPFileSystem: RemoteFileSystem {
     func homeDirectory() async throws -> String {
         try await SSHManager.shared.realPath(server: server, path: ".")
     }
-
-    /// 丢弃 SFTP 通道。注意：只丢通道，不断整条 SSH 连接——
-    /// 终端 PTY 与 SFTP 共用连接，断整条会把正在跑的终端会话一起杀掉。
-    func disconnect() async {
-        await SSHManager.shared.dropSFTPChannel(serverID: server.id)
-    }
 }

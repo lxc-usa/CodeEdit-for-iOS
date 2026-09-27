@@ -625,9 +625,10 @@ final class WorkspaceStore: ObservableObject {
                 let resolved = trimmed.isEmpty
                     ? try await fs.homeDirectory()
                     : try await SSHManager.shared.realPath(server: server, path: trimmed)
-                // 先 await 旧通道丢弃，再建新工作区：同一服务器切工作区时
-                // detached 的 drop 会和新工作区的首次列表 racing 误杀通道
-                await disconnectRemoteAndWait()
+                // 注意：这里故意不再丢弃旧 SFTP 通道。通道按服务器共享、按需复用
+                // （isActive 检查 + withSFTP 死通道重试自愈）；切工作区时 eager drop
+                // 反而可能误杀新工作区正在用的通道。关闭一个文件夹只脱钩工作区级
+                // 状态（见 disconnectRemote），绝不影响其他文件夹。
                 saveAll()
                 openDocuments.removeAll()
                 selectDocument(nil) // 终端标签与文件工作区无关，跨工作区保留
@@ -695,7 +696,9 @@ final class WorkspaceStore: ObservableObject {
         openRemoteWorkspace(server: server, path: ref.path)
     }
 
-    /// 移除远程文件夹记录（只删引用，不动远端文件）；若是当前工作区则断开并切回本地。
+    /// 移除远程文件夹记录（只删引用，不动远端文件）；若是当前工作区则切回本地。
+    /// 关闭一个文件夹只影响它自己：共享的 SFTP 通道按服务器复用、按需自愈，
+    /// 不会因为关 A 而断掉 B（见 disconnectRemote）。
     func removeRemoteWorkspace(_ ref: SavedRemoteWorkspace) {
         savedRemoteWorkspaces.removeAll { $0.id == ref.id }
         persistRemoteWorkspaces()
@@ -707,32 +710,22 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    /// 断开远程文件连接并切回本地。
-    /// 只丢 SFTP 通道，不断整条 SSH 连接——终端 PTY 共用这条连接，
-    /// 断整条会把正在跑的终端会话一起杀掉。
-    func disconnectRemote() {
-        guard let fs = remoteFS else { return }
-        remoteFS = nil
-        if let sftp = fs as? SFTPFileSystem {
-            Task { await sftp.disconnect() }
-        }
-    }
-
-    /// 断开远程文件连接（async 版）：await 旧 SFTP 通道的丢弃再返回。
+    /// 断开远程文件工作区：只把工作区级状态脱钩，不动服务器级共享资源。
     ///
-    /// openRemoteWorkspace 必须用这个而不是 disconnectRemote()：
-    /// 同一服务器切工作区时，旧通道的 drop 若与新工作区的首次列表并发，
-    /// 会把新列表正在用的通道提前关掉（NIOCore.ChannelError）。
-    func disconnectRemoteAndWait() async {
-        guard let fs = remoteFS else { return }
+    /// SFTP 通道是按服务器共享的（SSHManager 按 serverID 缓存），其他远程文件夹
+    /// 下次打开还要复用它；关闭一个文件夹绝不能把它丢掉，否则就是"关 A 影响 B"。
+    /// 通道不需要 eager drop：`sftp(for:)` 每次检查 isActive，`withSFTP` 遇到死通道
+    /// 自动重开并重试一次，完全自愈。以前这里用 detached Task 丢通道，
+    /// 反而和随后打开的文件夹的首次列表 racing 误杀通道（v9 修过同类问题）。
+    /// 真正的清理只在删除/修改服务器时做（ServerStore.delete/update →
+    /// SSHManager.disconnect(serverID:) 断整条连接）。
+    func disconnectRemote() {
         remoteFS = nil
-        if let sftp = fs as? SFTPFileSystem {
-            await sftp.disconnect()
-        }
     }
 
-    /// 若当前远程工作区属于该服务器，先断开（删服务器时调用），
-    /// 该服务器的远程文件夹记录一并清理。
+    /// 若当前远程工作区属于该服务器，先脱钩工作区（删服务器时调用），
+    /// 该服务器的远程文件夹记录一并清理。连接级清理（SFTP 通道 + 整条 SSH 连接）
+    /// 由 ServerStore.delete → SSHManager.disconnect(serverID:) 负责。
     func disconnectRemoteIfNeeded(serverID: UUID) {
         savedRemoteWorkspaces.removeAll { $0.serverID == serverID }
         persistRemoteWorkspaces()
