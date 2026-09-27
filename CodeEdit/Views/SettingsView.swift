@@ -132,15 +132,6 @@ struct SettingsView: View {
                     Text("关于")
                 }
 
-                Section {
-                    NavigationLink {
-                        DebugLogView()
-                    } label: {
-                        Text("调试日志")
-                    }
-                } header: {
-                    Text("调试")
-                }
             }
             .navigationTitle(Text("设置"))
             .navigationBarTitleDisplayMode(.inline)

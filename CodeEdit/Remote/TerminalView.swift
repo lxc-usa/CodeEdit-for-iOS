@@ -2,9 +2,6 @@ import SwiftUI
 import SwiftTerm
 import ObjectiveC
 
-/// 终端 accessory 留白调整标记（associated object key）。
-private var AccessoryPaddingAdjustedKey: UInt8 = 0
-
 
 /// 交互式 SSH 终端：PTY + xterm 仿真，可直接交互。
 ///
@@ -137,103 +134,6 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     /// 三段式状态机需要读写键盘抑制标记，弱引用避免循环。
     weak var stageWorkspace: WorkspaceStore?
 
-    /// 终端快捷栏横屏留白（用户 2026-09-27：左右各空一键宽）。
-    /// 在 TerminalView 布局后调整 accessory 的按钮：左组右移、右组左移。
-    /// 不碰 SwiftTerm 内部，只在外层调 frame，安全。
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        adjustTerminalAccessoryPadding()
-    }
-
-    private func adjustTerminalAccessoryPadding() {
-        let log = DebugLog.shared
-        guard let accessory = inputAccessoryView as? TerminalAccessory else {
-            log.append("padding: no accessory")
-            return
-        }
-        let vc = traitCollection.verticalSizeClass
-        // 只在横屏加留白
-        guard vc == .compact else { return }
-        // 确保 accessory 已布局
-        accessory.layoutIfNeeded()
-        guard accessory.bounds.width > accessory.bounds.height else { return }
-
-        let buttons = accessory.subviews.compactMap { $0 as? UIButton }.filter { !$0.isHidden && $0.frame.width > 0 }
-        guard !buttons.isEmpty else {
-            log.append("padding: no visible buttons")
-            return
-        }
-        // 避免重复调整：用关联标记记录已调整过的宽度
-        let widthKey = accessory.bounds.width
-        if let lastWidth = objc_getAssociatedObject(accessory, &AccessoryPaddingAdjustedKey) as? CGFloat,
-           lastWidth == widthKey {
-            return
-        }
-
-        // 用户 2026-09-27：横屏把每个键和间隔都压到 90%，挤出左右一键宽留白。
-        // 按原始 x 排序，依次重排：键宽×0.9、间隔×0.9。
-        let sorted = buttons.sorted { $0.frame.minX < $1.frame.minX }
-        let totalW = accessory.bounds.width
-        let scale: CGFloat = 0.95
-
-        // 先算压缩后的总占据宽度
-        var scaledOccupied: CGFloat = 0
-        var prevMaxX: CGFloat? = nil
-        var scaledWidths: [CGFloat] = []
-        var scaledGaps: [CGFloat] = []
-        for b in sorted {
-            let w = b.frame.width * scale
-            scaledWidths.append(w)
-            if let prev = prevMaxX {
-                let gap = max(0, b.frame.minX - prev) * scale
-                scaledGaps.append(gap)
-                scaledOccupied += gap + w
-            } else {
-                scaledGaps.append(0)
-                scaledOccupied += w
-            }
-            prevMaxX = b.frame.maxX
-        }
-        let avgKeyW = scaledWidths.reduce(0, +) / CGFloat(max(1, scaledWidths.count))
-        let targetMargin = avgKeyW
-        log.append("padding: buttons=\(sorted.count), scaledOccupied=\(scaledOccupied), totalW=\(totalW), avgKeyW=\(avgKeyW)")
-
-        // 如果压缩后还是放不下一键宽留白，就按能放下的比例再压一次
-        var finalScale = scale
-        let available = totalW - targetMargin * 2
-        if scaledOccupied > available && scaledOccupied > 0 {
-            finalScale = scale * (available / scaledOccupied)
-            log.append("padding: still too wide, finalScale=\(finalScale)")
-        }
-
-        // 重排：从 targetMargin 开始，依次放键
-        var x = targetMargin
-        // 居中微调：如果压缩后有剩余，左右均分
-        var recomputed: CGFloat = 0
-        for i in 0..<sorted.count {
-            let w = sorted[i].frame.width * finalScale
-            if i > 0 {
-                let origGap = max(0, sorted[i].frame.minX - sorted[i-1].frame.maxX)
-                recomputed += origGap * finalScale
-            }
-            recomputed += w
-        }
-        x = targetMargin + max(0, (totalW - targetMargin * 2 - recomputed) / 2)
-        log.append("padding: startX=\(x)")
-        for i in 0..<sorted.count {
-            let b = sorted[i]
-            let w = b.frame.width * finalScale
-            if i > 0 {
-                let origGap = max(0, b.frame.minX - sorted[i-1].frame.maxX)
-                x += origGap * finalScale
-            }
-            b.frame.origin.x = x
-            b.frame.size.width = w
-            x += w
-        }
-        objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-    }
-
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         let old = previousTraitCollection
@@ -244,8 +144,6 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if let accessory = self.inputAccessoryView as? TerminalAccessory {
-                // 清除留白标记，setupUI 重建按钮后按新宽度重新调整
-                objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                 accessory.setupUI()
                 accessory.setNeedsLayout()
                 accessory.layoutIfNeeded()
