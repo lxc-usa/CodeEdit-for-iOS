@@ -170,40 +170,66 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
             return
         }
 
-        // 整排居中：算出所有键占据的左右边界，整体平移到居中位置，
-        // 两边自然留出等宽空白。不会组间重叠。
-        let minX = buttons.map { $0.frame.minX }.min() ?? 0
-        let maxX = buttons.map { $0.frame.maxX }.max() ?? 0
-        let occupied = maxX - minX
+        // 用户 2026-09-27：横屏把每个键和间隔都压到 90%，挤出左右一键宽留白。
+        // 按原始 x 排序，依次重排：键宽×0.9、间隔×0.9。
+        let sorted = buttons.sorted { $0.frame.minX < $1.frame.minX }
         let totalW = accessory.bounds.width
-        // 目标：左右各留一键宽。一键宽取平均键宽。
-        let avgKeyW = occupied / CGFloat(buttons.count)
-        let targetMargin = avgKeyW
-        let targetMinX = targetMargin
-        let targetMaxX = totalW - targetMargin
-        let targetOccupied = targetMaxX - targetMinX
-        log.append("padding: buttons=\(buttons.count), occupied=\(occupied), totalW=\(totalW), avgKeyW=\(avgKeyW)")
+        let scale: CGFloat = 0.9
 
-        if occupied > targetOccupied {
-            // 键太多，一键宽留白放不下：退而求其次，整排居中（两边等分剩余空间）。
-            let shift = (totalW - occupied) / 2 - minX
-            log.append("padding: too wide, center only, shift=\(shift)")
-            if abs(shift) < 0.5 {
-                objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-                return
+        // 先算压缩后的总占据宽度
+        var scaledOccupied: CGFloat = 0
+        var prevMaxX: CGFloat? = nil
+        var scaledWidths: [CGFloat] = []
+        var scaledGaps: [CGFloat] = []
+        for b in sorted {
+            let w = b.frame.width * scale
+            scaledWidths.append(w)
+            if let prev = prevMaxX {
+                let gap = max(0, b.frame.minX - prev) * scale
+                scaledGaps.append(gap)
+                scaledOccupied += gap + w
+            } else {
+                scaledGaps.append(0)
+                scaledOccupied += w
             }
-            for b in buttons {
-                b.frame.origin.x += shift
-            }
-            objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-            return
+            prevMaxX = b.frame.maxX
+        }
+        let avgKeyW = scaledWidths.reduce(0, +) / CGFloat(max(1, scaledWidths.count))
+        let targetMargin = avgKeyW
+        log.append("padding: buttons=\(sorted.count), scaledOccupied=\(scaledOccupied), totalW=\(totalW), avgKeyW=\(avgKeyW)")
+
+        // 如果压缩后还是放不下一键宽留白，就按能放下的比例再压一次
+        var finalScale = scale
+        let available = totalW - targetMargin * 2
+        if scaledOccupied > available && scaledOccupied > 0 {
+            finalScale = scale * (available / scaledOccupied)
+            log.append("padding: still too wide, finalScale=\(finalScale)")
         }
 
-        // 放得下：整排平移到 [targetMargin, totalW-targetMargin] 居中。
-        let shift = targetMinX + (targetOccupied - occupied) / 2 - minX
-        log.append("padding: shift=\(shift) for one-key margins")
-        for b in buttons {
-            b.frame.origin.x += shift
+        // 重排：从 targetMargin 开始，依次放键
+        var x = targetMargin
+        // 居中微调：如果压缩后有剩余，左右均分
+        var recomputed: CGFloat = 0
+        for i in 0..<sorted.count {
+            let w = sorted[i].frame.width * finalScale
+            if i > 0 {
+                let origGap = max(0, sorted[i].frame.minX - sorted[i-1].frame.maxX)
+                recomputed += origGap * finalScale
+            }
+            recomputed += w
+        }
+        x = targetMargin + max(0, (totalW - targetMargin * 2 - recomputed) / 2)
+        log.append("padding: startX=\(x)")
+        for i in 0..<sorted.count {
+            let b = sorted[i]
+            let w = b.frame.width * finalScale
+            if i > 0 {
+                let origGap = max(0, b.frame.minX - sorted[i-1].frame.maxX)
+                x += origGap * finalScale
+            }
+            b.frame.origin.x = x
+            b.frame.size.width = w
+            x += w
         }
         objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
