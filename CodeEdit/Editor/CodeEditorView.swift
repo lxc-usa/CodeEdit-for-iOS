@@ -215,19 +215,30 @@ struct CodeEditorView: UIViewRepresentable {
                 if isPad {
                     keyW = 44; keyH = 44; fontSize = 22
                 } else if landscape {
-                    keyW = 30; keyH = 28; fontSize = 20
+                    // 横屏对标系统键盘（用户 2026-09-27 真机截图实测）：
+                    // Q/W 键宽 66pt、键高 30pt、行距 34.4pt。
+                    keyW = 66; keyH = 30; fontSize = 21
                 } else {
                     // 竖屏：14 符号键 + 隐藏键共 15 个，挤一挤全部显示，不横滑
                     // （用户 2026-09-27：竖屏只差两三个键位，要求挤挤全显示）
                     keyW = max(18, (bounds.width - 16 - 14 * 6) / 15)
                     keyH = 44; fontSize = 20
                 }
+                // 栏高：横屏 34pt（= 系统键盘一行高度，实测行距 34.4pt），
+                // 竖屏/iPad 保持 58pt。
+                let barH: CGFloat = (!isPad && landscape) ? 34 : 58
                 let spec = "\(keyW)x\(keyH)"
                 if spec != appliedKeySpec {
                     appliedKeySpec = spec
                     for (w, h) in keySizeConstraints {
                         w.constant = keyW
                         h.constant = keyH
+                    }
+                    // 高度只在规格切换（横竖屏）时改一次，不在每次布局里改——
+                    // v19 每轮布局都改高度，跟键盘排版打架导致主线程冻住。
+                    // 这里改完后 spec 已更新，不会重复触发，不形成循环。
+                    if abs(frame.size.height - barH) > 0.5 {
+                        frame.size.height = barH
                     }
                     if let stack = symbolStack {
                         for case let b as UIButton in stack.arrangedSubviews {
@@ -271,9 +282,10 @@ struct CodeEditorView: UIViewRepresentable {
         func makeSymbolBar() -> UIView {
             let container = SymbolBarView()
             container.backgroundColor = .secondarySystemBackground
-            // inputAccessoryView 用 frame 定高 58pt，宽度由系统拉伸；
-            // 高度定死后 layout 里绝不再改，否则键盘占位和实际高度打架、
-            // 底部漏出白条（v19 真机实测）。
+            // inputAccessoryView 用 frame 定高，宽度由系统拉伸；
+            // 初始 58pt（竖屏）；横屏时 layoutSubviews 在规格切换中一次性调到 34pt。
+            // 高度平时绝不在每轮布局里改，否则键盘占位和实际高度打架、
+            // 底部漏出白条、甚至转屏冻住（v19 真机实测）。
             container.frame = CGRect(x: 0, y: 0, width: 0, height: 58)
             container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
