@@ -28,6 +28,7 @@ final class TopBarScrollTracker {
     private let cooldown: TimeInterval = 0.5
     /// 旋转抑制截止时间：旋转动画约 0.3～0.5s，留足余量
     private var rotationSuppressUntil = Date.distantPast
+    private var lastBoundsSize: CGSize = .zero
     private let rotationSuppression: TimeInterval = 1.5
     private var orientationObserver: NSObjectProtocol?
     /// 上次见到的滚动区 bounds 尺寸：旋转/键盘升降/分屏会改变它，普通滚动不会。
