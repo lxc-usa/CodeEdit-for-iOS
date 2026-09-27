@@ -174,7 +174,7 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
         // 按原始 x 排序，依次重排：键宽×0.9、间隔×0.9。
         let sorted = buttons.sorted { $0.frame.minX < $1.frame.minX }
         let totalW = accessory.bounds.width
-        let scale: CGFloat = 0.9
+        let scale: CGFloat = 0.95
 
         // 先算压缩后的总占据宽度
         var scaledOccupied: CGFloat = 0
