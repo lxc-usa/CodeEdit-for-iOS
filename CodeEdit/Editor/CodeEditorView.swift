@@ -299,7 +299,10 @@ struct CodeEditorView: UIViewRepresentable {
             let screenBounds = UIScreen.main.bounds
             let initialH: CGFloat = (screenBounds.width > screenBounds.height) ? 34 : 58
             container.frame = CGRect(x: 0, y: 0, width: 0, height: initialH)
-            container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            // 宽度由系统拉伸，高度固定（我们自己按横竖屏设 34/58）。
+            // 绝不能加 .flexibleHeight：系统布局时会把高度拉回初始值，
+            // 底部多出空背景、看起来像跟键盘之间有间隔（v21.5 真机实测 #2 未修好）。
+            container.autoresizingMask = [.flexibleWidth]
 
             // "隐藏键盘"按钮：样式与符号键一致，尺寸跟随键尺寸，排在最后。
             let hideButton = UIButton(type: .system)
