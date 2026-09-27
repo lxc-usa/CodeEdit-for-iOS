@@ -22,8 +22,13 @@ struct EditorAreaView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !workspace.openDocuments.isEmpty || !workspace.openTerminals.isEmpty {
-                tabBar
-                Divider()
+                // 顶部栏自动显隐：上滑隐藏（导航栏 + 标签条），下滑恢复
+                if !workspace.isTopBarsHidden {
+                    tabBar
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    Divider()
+                        .transition(.opacity)
+                }
             }
             // 终端层常驻挂载（切到文件标签时只是隐藏）：保住回滚屏、不断会话；
             // 选中态经 isActive 驱动键盘聚焦/让出，非选中不参与触摸。
@@ -57,6 +62,7 @@ struct EditorAreaView: View {
                 }
             }
         }
+        .toolbar(workspace.isTopBarsHidden ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -66,6 +72,16 @@ struct EditorAreaView: View {
                 }
                 .disabled(workspace.selectedDocument == nil)
             }
+        }
+        // 切标签 / 关到无标签（欢迎页无滚动视图）时恢复顶部栏，避免困在隐藏状态
+        .onChange(of: workspace.selectedDocument?.id) { _, _ in
+            workspace.setTopBarsHidden(false)
+        }
+        .onChange(of: workspace.selectedTerminal?.id) { _, _ in
+            workspace.setTopBarsHidden(false)
+        }
+        .onChange(of: workspace.openDocuments.isEmpty && workspace.openTerminals.isEmpty) { _, isEmpty in
+            if isEmpty { workspace.setTopBarsHidden(false) }
         }
     }
 

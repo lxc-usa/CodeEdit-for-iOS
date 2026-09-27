@@ -17,6 +17,9 @@ final class WorkspaceStore: ObservableObject {
     /// 用户手动隐藏了终端键盘：抑制自动重弹（点终端视图任意处恢复，
     /// 切标签时重置）。编辑器不需要此标记（它不会自动抢焦点）。
     @Published var isTerminalKeyboardSuppressed = false
+    /// 顶部栏（导航栏 + 标签页条）是否隐藏：编辑器/终端上滑时隐藏以扩大可视区，
+    /// 下滑或回顶部时恢复。只由 TopBarScrollTracker 经用户手势驱动。
+    @Published var isTopBarsHidden = false
     /// 服务器仓库（CodeEditApp 注入，供终端标签取服务器名）。
     var servers: ServerStore?
     /// 非空时由界面弹出提示框。
@@ -195,6 +198,14 @@ final class WorkspaceStore: ObservableObject {
     }
 
     // MARK: - 标签选择（文档 / 终端互斥）
+
+    /// 设置顶部栏显隐（带动画；无变化时不触发刷新，避免滚动中反复重绘）。
+    func setTopBarsHidden(_ hidden: Bool) {
+        guard isTopBarsHidden != hidden else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            isTopBarsHidden = hidden
+        }
+    }
 
     /// 选中文档标签；传入非 nil 时同时取消终端选中。
     func selectDocument(_ doc: EditorDocument?) {

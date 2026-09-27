@@ -72,8 +72,8 @@ struct TerminalView: View {
                 )
             }
         }
-        .navigationTitle(servers.server(id: tab.serverID)?.name ?? "SSH 终端")
-        .navigationBarTitleDisplayMode(.inline)
+        // 标题由 ContentView 统一管理（当前工作区名）：这里不再设 navigationTitle，
+        // 否则所有挂载（即使隐藏）的终端标签都会劫持导航栏标题。
         .onAppear(perform: connect)
         .onChange(of: shell.state) { _, newState in
             // 远端 shell 自己退出（用户敲了 exit）：直接关闭当前标签，
@@ -281,6 +281,14 @@ private struct TerminalHostView: UIViewRepresentable {
         shell.onData = { bytes in
             tv.feed(byteArray: ArraySlice(bytes))
         }
+        // 顶部栏自动显隐：上滑隐藏、下滑显示（只响应用户手势，且只响应当前选中的标签）
+        let topBarTracker = TopBarScrollTracker(workspace: workspace)
+        context.coordinator.topBarTracker = topBarTracker
+        context.coordinator.isActive = isActive
+        context.coordinator.scrollObservation = tv.observe(\.contentOffset, options: [.new]) { [weak coordinator] scrollView, _ in
+            guard let coordinator, coordinator.isActive else { return }
+            coordinator.topBarTracker?.handleScroll(scrollView)
+        }
         // 打开即聚焦，可直接打字（标签页场景下由 updateUIView 按 isActive 管理）
         if isActive {
             DispatchQueue.main.async {
@@ -296,6 +304,8 @@ private struct TerminalHostView: UIViewRepresentable {
             tv.font = want
         }
         applyAppearance(to: tv)
+        // 顶部栏显隐只跟随当前选中的标签
+        context.coordinator.isActive = isActive
         // 标签切换时切换键盘：选中终端 → 弹出终端键盘（含 Esc/Ctrl 快捷栏）；
         // 切到文件标签 → 让出焦点，键盘收回（文件编辑器被点时再按需弹出）。
         // 用户点了"隐藏键盘"后抑制自动重弹（isTerminalKeyboardSuppressed），
@@ -341,6 +351,12 @@ private struct TerminalHostView: UIViewRepresentable {
         var onSend: (([UInt8]) -> Void)?
         var onResize: ((Int, Int) -> Void)?
         var onTap: (() -> Void)?
+        /// 当前标签是否选中：只有选中的终端才驱动顶部栏显隐
+        var isActive = false
+        /// 顶部栏自动显隐：KVO 观察 contentOffset（SwiftTerm 的 scrolled 代理
+        /// 也会在程序化滚动时触发，无法区分用户手势）。
+        var topBarTracker: TopBarScrollTracker?
+        var scrollObservation: NSKeyValueObservation?
 
         /// 用户点终端视图：恢复输入意图（解除键盘抑制）。
         @objc func handleTap() {

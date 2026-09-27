@@ -13,8 +13,10 @@ struct ContentView: View {
     @State private var showDrawer = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
-    /// iPhone 导航栏标题：终端标签选中时显示服务器名。
+    /// 导航栏标题：当前工作区的名字；没有工作区时退回活跃文件名/终端服务器名。
     private var navigationTitle: String {
+        let name = workspace.workspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
         if let term = workspace.selectedTerminal {
             return servers.server(id: term.serverID)?.name ?? term.title
         }
@@ -41,6 +43,7 @@ struct ContentView: View {
             )
         } detail: {
             EditorAreaView(workspace: workspace, settings: settings, servers: servers)
+                .navigationTitle(navigationTitle)
                 .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showSettings) {

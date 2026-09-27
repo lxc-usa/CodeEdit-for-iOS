@@ -77,6 +77,13 @@ struct CodeEditorView: UIViewRepresentable {
         coordinator.themeKey = themeKey()
         coordinator.loadInitialText()
 
+        // 顶部栏自动显隐：上滑隐藏、下滑显示（只响应用户手势）
+        let topBarTracker = TopBarScrollTracker(workspace: workspace)
+        coordinator.topBarTracker = topBarTracker
+        coordinator.scrollObservation = tv.observe(\.contentOffset, options: [.new]) { [weak coordinator] scrollView, _ in
+            coordinator?.topBarTracker?.handleScroll(scrollView)
+        }
+
         findController.requestFind = { [weak tv] in
             tv?.findInteraction?.presentFindNavigator(showingReplace: false)
         }
@@ -133,6 +140,10 @@ struct CodeEditorView: UIViewRepresentable {
         var suppressChanges = false
         var themeKey: String?
         var tabWidth: Int = 4
+        /// 顶部栏自动显隐：KVO 观察 contentOffset
+        ///（Runestone 的 TextViewDelegate 没有滚动回调）。
+        var scrollObservation: NSKeyValueObservation?
+        private var topBarTracker: TopBarScrollTracker?
 
         init(_ parent: CodeEditorView) {
             self.parent = parent
