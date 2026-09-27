@@ -146,24 +146,39 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
     }
 
     private func adjustTerminalAccessoryPadding() {
-        guard let accessory = inputAccessoryView as? TerminalAccessory else { return }
+        let log = DebugLog.shared
+        guard let accessory = inputAccessoryView as? TerminalAccessory else {
+            log.append("padding: no accessory")
+            return
+        }
+        let vc = traitCollection.verticalSizeClass
+        log.append("padding: layoutSubviews, vc=\(vc.rawValue), accBounds=\(accessory.bounds)")
         // 只在横屏加留白
-        guard traitCollection.verticalSizeClass == .compact else { return }
+        guard vc == .compact else {
+            log.append("padding: skip, not landscape")
+            return
+        }
         // 确保 accessory 已布局
         accessory.layoutIfNeeded()
-        guard accessory.bounds.width > accessory.bounds.height else { return }
+        guard accessory.bounds.width > accessory.bounds.height else {
+            log.append("padding: skip, acc not wide (\(accessory.bounds))")
+            return
+        }
 
         let buttons = accessory.subviews.compactMap { $0 as? UIButton }
+        log.append("padding: buttons=\(buttons.count)")
         guard !buttons.isEmpty else { return }
         // 避免重复调整：用关联标记记录已调整过的宽度
         let widthKey = accessory.bounds.width
         if let lastWidth = objc_getAssociatedObject(accessory, &AccessoryPaddingAdjustedKey) as? CGFloat,
            lastWidth == widthKey {
+            log.append("padding: skip, already adjusted for width \(widthKey)")
             return
         }
 
         guard let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }) else { return }
         let keyW = leftmost.frame.width
+        log.append("padding: keyW=\(keyW), leftmost.x=\(leftmost.frame.minX)")
         guard keyW > 0 else { return }
         let shift = keyW - 2
         guard shift > 0 else { return }
@@ -180,8 +195,10 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
                 rightMinX = min(rightMinX, b.frame.minX)
             }
         }
+        log.append("padding: applied shift=\(shift), leftMaxX=\(leftMaxX), rightMinX=\(rightMinX)")
         // 重叠则回退：重新布局恢复原状
         if leftMaxX > rightMinX {
+            log.append("padding: overlap, revert")
             accessory.setNeedsLayout()
             accessory.layoutIfNeeded()
             return
