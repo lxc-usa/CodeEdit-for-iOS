@@ -61,15 +61,6 @@ let targets: [Target] = [
         dependencies: ["SwiftTerm"],
         path: "Sources/SwiftTermFuzz"
     ),
-    .testTarget(
-        name: "SwiftTermTests",
-        dependencies: ["SwiftTerm"],
-        path: "Tests/SwiftTermTests",
-        resources: [
-            .copy("Fixtures/xterm-ghostty.infocmp"),
-            .copy("Fixtures/swifterm-terminfo.infocmp")
-        ]
-    )
 ] + buildInfoTargets
 #else
 let products: [Product] = [
@@ -129,15 +120,6 @@ let targets: [Target] = [
         ],
         path: "Sources/Termcast"
     ),
-    .testTarget(
-        name: "SwiftTermTests",
-        dependencies: ["SwiftTerm"],
-        path: "Tests/SwiftTermTests",
-        resources: [
-            .copy("Fixtures/xterm-ghostty.infocmp"),
-            .copy("Fixtures/swifterm-terminfo.infocmp")
-        ]
-    )
 ] + benchmarkTargets + buildInfoTargets
 #endif
 
