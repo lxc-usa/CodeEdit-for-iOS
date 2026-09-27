@@ -191,19 +191,13 @@ final class InteractiveShell: ObservableObject {
         case .failed, .ended: return false
         }
     }
-
-    /// 与当前视图解绑：不断开远端会话，后续输出暂存到 pendingData，
-    /// 下次挂载 onData 时一次性补上。用于"终端会话保持"模式离开页面时。
-    func detach() {
-        onData = nil
-    }
 }
 
-/// 终端会话缓存：按服务器 ID 在内存中保留 InteractiveShell，
-/// 使"进入终端继续上次会话"成为可能（设置 → 连接 → 终端会话保持）。
+/// 终端会话缓存：按服务器 ID 在内存中保留 InteractiveShell。
 ///
+/// - 会话与视图生命周期解耦：横竖屏切换、布局重建不会结束会话；
+///   只有显式关闭终端标签（WorkspaceStore.closeTerminal）或删除服务器时才丢弃。
 /// - 会话只在内存中保留，App 重启后消失。
-/// - 离开页面时由 TerminalView 决定 stop（结束会话）还是 detach（后台保持）。
 /// - 服务器删除/编辑后底层 SSH 已断开，会话自然失效，下次进入自动重开。
 @MainActor
 final class TerminalSessionCache {

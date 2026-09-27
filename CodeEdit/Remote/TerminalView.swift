@@ -7,7 +7,10 @@ import SwiftTerm
 /// - 支持 top/htop/vi 等全屏程序（ANSI 转义、备用屏幕、光标定位由 SwiftTerm 仿真）
 /// - 键盘上方自带 Esc/Ctrl/方向键/Tab 快捷栏（SwiftTerm TerminalAccessory）
 /// - 作为标签页显示在主界面编辑区；切到终端标签时自动聚焦（弹出终端键盘），
-///   切走时让出焦点；关闭标签时按"会话保持"设置结束或挂起会话
+///   切走时让出焦点
+/// - 会话生命周期与视图解耦：横竖屏切换、布局重建不会结束会话；
+///   只有显式关闭标签（或删除服务器）才真正结束会话
+/// - 字体/字号与代码编辑器共用同一套设置
 @MainActor
 struct TerminalView: View {
     let serverID: UUID
@@ -18,17 +21,20 @@ struct TerminalView: View {
     let isActive: Bool
     @ObservedObject var servers: ServerStore
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var workspace: WorkspaceStore
     @Environment(\.colorScheme) private var colorScheme
 
-    /// 会话来自 TerminalSessionCache（按服务器保留），"会话保持"打开时可复用。
+    /// 会话来自 TerminalSessionCache（按服务器保留），横竖屏切换等视图重建
+    /// 不影响会话；只有显式关闭标签才结束（见 WorkspaceStore.closeTerminal）。
     @StateObject private var shell: InteractiveShell
 
-    init(serverID: UUID, initialPath: String?, servers: ServerStore, settings: SettingsStore, isActive: Bool = true) {
+    init(serverID: UUID, initialPath: String?, servers: ServerStore, settings: SettingsStore, workspace: WorkspaceStore, isActive: Bool = true) {
         self.serverID = serverID
         self.initialPath = initialPath
         self.isActive = isActive
         self.servers = servers
         self.settings = settings
+        self.workspace = workspace
         _shell = StateObject(wrappedValue: TerminalSessionCache.shared.shell(for: serverID))
     }
 
@@ -44,7 +50,7 @@ struct TerminalView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .connected:
-                TerminalHostView(shell: shell, settings: settings, colorScheme: colorScheme, isActive: isActive)
+                TerminalHostView(shell: shell, settings: settings, workspace: workspace, colorScheme: colorScheme, isActive: isActive)
             case .failed(let message):
                 EmptyState(
                     icon: "wifi.exclamationmark",
@@ -66,23 +72,18 @@ struct TerminalView: View {
         .navigationTitle(servers.server(id: serverID)?.name ?? "SSH 终端")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: connect)
-        .onDisappear {
-            // 标签关闭时才到这里（切标签只是隐藏，视图不卸载，会话继续跑）。
-            if settings.terminalResumeSession {
-                // 会话保持：只与视图解绑，会话在后台继续（输出暂存，重进时补上）
-                shell.detach()
-            } else {
-                shell.stop()
-            }
-        }
+        // 注意：这里故意没有 onDisappear。横竖屏切换时 ContentView 会在
+        // compact/split 两种布局间重建整个编辑区，onDisappear 会被触发；
+        // 若在此结束会话，旋转一次就掉一次连接（远端 shell 被写 exit 杀掉）。
+        // 会话只在显式关闭标签时结束（WorkspaceStore.closeTerminal → discard）。
     }
 
     private func connect() {
         guard let server = servers.server(id: serverID) else { return }
-        // 会话保持且上次会话还活着：直接复用，不重开；
-        // makeUIView 重建时会重新把 onData 挂到新视图。
-        if settings.terminalResumeSession && shell.isAlive { return }
-        // 非保持模式（或旧会话已死）：先确保旧会话结束再开新会话。
+        // 会话还活着（旋转重建、切标签回来）：直接复用，不重开；
+        // makeUIView 重建时会重新把 onData 挂到新视图，暂存的输出自动补上。
+        if shell.isAlive { return }
+        // 旧会话已死：先确保旧会话结束再开新会话。
         // stop() 是同步的，配合 generation 守卫，旧 task 的异步收尾不会污染新会话。
         shell.stop()
         shell.start(server: server, initialPath: initialPath)
@@ -124,6 +125,7 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
 private struct TerminalHostView: UIViewRepresentable {
     @ObservedObject var shell: InteractiveShell
     var settings: SettingsStore
+    @ObservedObject var workspace: WorkspaceStore
     var colorScheme: ColorScheme
     /// 当前标签是否被选中：选中时抢键盘焦点（弹出终端键盘），切走时让出。
     var isActive: Bool
@@ -144,6 +146,15 @@ private struct TerminalHostView: UIViewRepresentable {
         }
         context.coordinator.onSend = onSend
         context.coordinator.onResize = onResize
+        // 点终端任意处 = 重新获得输入意图：解除"隐藏键盘"抑制，弹回键盘。
+        // 手势不吞事件（cancelsTouchesInView=false），不影响 SwiftTerm 自己的
+        // 点选/滚动处理。
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap))
+        tap.cancelsTouchesInView = false
+        tv.addGestureRecognizer(tap)
+        context.coordinator.onTap = { [weak workspace] in
+            Task { @MainActor in workspace?.isTerminalKeyboardSuppressed = false }
+        }
         // 远端输出 → xterm 仿真器（InteractiveShell 保证主线程回调）
         shell.onData = { bytes in
             tv.feed(byteArray: ArraySlice(bytes))
@@ -165,7 +176,10 @@ private struct TerminalHostView: UIViewRepresentable {
         applyAppearance(to: tv)
         // 标签切换时切换键盘：选中终端 → 弹出终端键盘（含 Esc/Ctrl 快捷栏）；
         // 切到文件标签 → 让出焦点，键盘收回（文件编辑器被点时再按需弹出）。
-        if isActive {
+        // 用户点了"隐藏键盘"后抑制自动重弹（isTerminalKeyboardSuppressed），
+        // 否则远端每来一次输出、每次 updateUIView 都会把键盘再顶出来。
+        let wantKeyboard = isActive && !workspace.isTerminalKeyboardSuppressed
+        if wantKeyboard {
             if !tv.isFirstResponder {
                 DispatchQueue.main.async {
                     tv.becomeFirstResponder()
@@ -177,7 +191,8 @@ private struct TerminalHostView: UIViewRepresentable {
     }
 
     private func terminalUIFont() -> UIFont {
-        settings.monoFont.uiFont(size: CGFloat(settings.monoFontSize))
+        // 与代码编辑器共用同一套字体/字号设置
+        settings.monoFont.uiFont(size: CGFloat(settings.fontSize))
     }
 
     private func applyAppearance(to tv: SwiftTerm.TerminalView) {
@@ -196,6 +211,12 @@ private struct TerminalHostView: UIViewRepresentable {
     final class Coordinator: NSObject, TerminalViewDelegate {
         var onSend: (([UInt8]) -> Void)?
         var onResize: ((Int, Int) -> Void)?
+        var onTap: (() -> Void)?
+
+        /// 用户点终端视图：恢复输入意图（解除键盘抑制）。
+        @objc func handleTap() {
+            onTap?()
+        }
 
         /// 用户按键 → SSH 通道。
         func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {

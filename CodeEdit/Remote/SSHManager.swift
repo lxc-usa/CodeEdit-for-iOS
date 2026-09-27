@@ -230,6 +230,15 @@ actor SSHManager {
         }
     }
 
+    /// 只丢弃 SFTP 通道，不断开整条 SSH 连接。
+    ///
+    /// 终端 PTY 与 SFTP 共用 `clients[serverID]` 这一条连接：切工作区、
+    /// 关文件夹时只须丢掉 SFTP 通道，连接留给终端会话继续用，
+    /// 下次 SFTP 操作按需重开通道。整条连接只在编辑/删除服务器时才关闭。
+    func dropSFTPChannel(serverID: UUID) async {
+        await dropSFTP(serverID: serverID)
+    }
+
     // MARK: - 连接
 
     func client(for server: ServerConfig) async throws -> SSHClient {

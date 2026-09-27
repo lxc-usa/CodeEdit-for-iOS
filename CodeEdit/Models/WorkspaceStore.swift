@@ -14,8 +14,12 @@ final class WorkspaceStore: ObservableObject {
     /// 打开的终端标签（一台服务器最多一个标签，会话由 TerminalSessionCache 按 serverID 持有）。
     @Published var openTerminals: [TerminalTab] = []
     @Published var selectedTerminal: TerminalTab?
+    /// 用户手动隐藏了终端键盘：抑制自动重弹（点终端视图任意处恢复，
+    /// 切标签时重置）。编辑器不需要此标记（它不会自动抢焦点）。
+    @Published var isTerminalKeyboardSuppressed = false
     /// 服务器仓库（CodeEditApp 注入，供终端标签取服务器名）。
-    var servers: ServerStore?    /// 非空时由界面弹出提示框。
+    var servers: ServerStore?
+    /// 非空时由界面弹出提示框。
     @Published var alertMessage: String?
 
     private var saveWorkItems: [String: DispatchWorkItem] = [:]
@@ -57,7 +61,9 @@ final class WorkspaceStore: ObservableObject {
     @Published var savedWorkspaces: [ResolvedWorkspace] = []
     /// 当前工作区 id；nil = 本地 Documents（远程工作区另见 remoteFS）。
     @Published var activeWorkspaceId: UUID?
-    var isLocalWorkspace: Bool { activeWorkspaceId == nil && remoteFS == nil }
+    var isLocalWorkspace: Bool {
+        activeWorkspaceId == nil && activeRemoteWorkspaceId == nil && remoteFS == nil
+    }
     /// 是否远程工作区（FileBrowserView 用）。
     var isRemoteWorkspace: Bool { remoteFS != nil }
     /// 远程文件系统；非 nil 表示当前是远程工作区（SFTP/WebDAV/…）。
@@ -70,6 +76,7 @@ final class WorkspaceStore: ObservableObject {
         workspaceName = NSLocalizedString("本地文件", comment: "Local workspace name")
         refresh(item: rootItem)
         loadSavedWorkspaces()
+        loadSavedRemoteWorkspaces()
         restoreActiveWorkspace()
         seedWelcomeIfNeeded()
     }
@@ -198,7 +205,11 @@ final class WorkspaceStore: ObservableObject {
     /// 选中终端标签；传入非 nil 时同时取消文档选中。
     func selectTerminal(_ tab: TerminalTab?) {
         selectedTerminal = tab
-        if tab != nil { selectedDocument = nil }
+        if tab != nil {
+            selectedDocument = nil
+            // 切到终端标签 = 新的输入意图，恢复自动弹键盘
+            isTerminalKeyboardSuppressed = false
+        }
     }
 
     // MARK: - 终端标签
@@ -216,11 +227,13 @@ final class WorkspaceStore: ObservableObject {
         selectTerminal(tab)
     }
 
-    /// 关闭终端标签。标签视图的 onDisappear 会按"会话保持"设置停止或挂起会话。
+    /// 关闭终端标签。显式关闭 = 真正结束会话：丢弃缓存中的 SSH 会话
+    /// （横竖屏切换等视图重建不再经过这里，会话不受影响）。
     func closeTerminal(_ tab: TerminalTab) {
         guard let idx = openTerminals.firstIndex(where: { $0.id == tab.id }) else { return }
         let wasSelected = selectedTerminal?.id == tab.id
         openTerminals.remove(at: idx)
+        TerminalSessionCache.shared.discard(serverID: tab.serverID)
         if wasSelected {
             if let next = openTerminals.last {
                 selectTerminal(next)
@@ -431,6 +444,10 @@ final class WorkspaceStore: ObservableObject {
         refresh(item: rootItem)
         workspaceName = name
         activeWorkspaceId = id
+        // 切到本地工作区：远程工作区的活跃标记一并清除
+        // （不断整条 SSH 连接，终端会话不受影响）
+        activeRemoteWorkspaceId = nil
+        UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceIdKey)
         if persist {
             if let id {
                 UserDefaults.standard.set(id.uuidString, forKey: Self.activeWorkspaceKey)
@@ -552,14 +569,25 @@ final class WorkspaceStore: ObservableObject {
 
     // MARK: - 远程工作区（SFTP/WebDAV/FTP/SMB，经 RemoteFileSystem 抽象）
 
-    /// 持久化的远程工作区引用（服务器配置本身由 ServerStore 存）。
-    private struct SavedRemoteWorkspace: Codable {
+    /// 持久化的远程工作区记录（服务器配置本身由 ServerStore 存）。
+    struct SavedRemoteWorkspace: Codable, Identifiable {
+        var id: UUID
         var serverID: UUID
         var path: String
         var scheme: String
+        /// 保存时的显示名（服务器改名后界面按实时名显示，此为兜底）。
+        var name: String
     }
 
-    private static let activeRemoteWorkspaceKey = "codeedit.activeRemoteWorkspace"
+    private static let savedRemoteWorkspacesKey = "codeedit.savedRemoteWorkspaces"
+    private static let activeRemoteWorkspaceIdKey = "codeedit.activeRemoteWorkspaceId"
+
+    /// 已保存的远程文件夹（去重：同一服务器同一路径只记一条），抽屉菜单一键切换。
+    @Published var savedRemoteWorkspaces: [SavedRemoteWorkspace] = []
+    /// 当前远程工作区 id；nil = 非远程工作区。
+    @Published var activeRemoteWorkspaceId: UUID?
+    /// App 启动恢复只尝试一次（servers 就绪后由 CodeEditApp 调用）。
+    private var remoteRestoreAttempted = false
 
     /// 当前远程工作区的服务器 id（remoteFS 非 nil 时有效）。
     var remoteServerID: UUID? {
@@ -588,7 +616,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     /// 打开远程文件夹作为工作区：先连通验证，再切换（与本地"打开文件夹"对等）。
-    /// path 为空则打开服务器主目录。
+    /// path 为空则打开服务器主目录。打开后记入远程文件夹列表，支持一键切换。
     func openRemoteWorkspace(server: ServerConfig, path: String) {
         Task {
             let fs = SFTPFileSystem(server: server)
@@ -604,11 +632,29 @@ final class WorkspaceStore: ObservableObject {
                 remoteFS = fs
                 let url = Self.remoteURL(scheme: fs.urlScheme, serverID: server.id, path: resolved)
                 rootItem = FileItem(url: url, isDirectory: true)
-                rootItem.name = resolved == "/" ? server.name
-                    : "\(server.name) / \(URL(fileURLWithPath: resolved).lastPathComponent)"
-                workspaceName = rootItem.name
+                let displayName = Self.remoteDisplayName(serverName: server.name, path: resolved)
+                rootItem.name = displayName
+                workspaceName = displayName
                 activeWorkspaceId = nil
-                persistRemoteWorkspace(serverID: server.id, path: resolved, scheme: fs.urlScheme)
+                // 记入远程文件夹列表（同一服务器同一路径去重），抽屉菜单一键切换
+                let ref: SavedRemoteWorkspace
+                if let existing = savedRemoteWorkspaces.first(where: {
+                    $0.serverID == server.id && $0.path == resolved
+                }) {
+                    ref = existing
+                } else {
+                    ref = SavedRemoteWorkspace(
+                        id: UUID(), serverID: server.id, path: resolved,
+                        scheme: fs.urlScheme, name: displayName
+                    )
+                    savedRemoteWorkspaces.append(ref)
+                    savedRemoteWorkspaces.sort {
+                        $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                    }
+                    persistRemoteWorkspaces()
+                }
+                activeRemoteWorkspaceId = ref.id
+                UserDefaults.standard.set(ref.id.uuidString, forKey: Self.activeRemoteWorkspaceIdKey)
                 await loadRemoteChildren(of: rootItem, force: true)
                 treeDidChange()
             } catch {
@@ -617,39 +663,99 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    /// 断开远程连接并切回本地（切换/删除服务器时调用）。
+    /// 远程文件夹显示名：根目录显示服务器名，否则"服务器名 / 文件夹名"。
+    static func remoteDisplayName(serverName: String, path: String) -> String {
+        path == "/" ? serverName : "\(serverName) / \(URL(fileURLWithPath: path).lastPathComponent)"
+    }
+
+    /// 远程文件夹的实时显示名（服务器改名后自动跟随；服务器已删则用保存时的名字）。
+    func remoteWorkspaceDisplayName(_ ref: SavedRemoteWorkspace) -> String {
+        if let server = servers?.server(id: ref.serverID) {
+            return Self.remoteDisplayName(serverName: server.name, path: ref.path)
+        }
+        return ref.name
+    }
+
+    /// 打开已保存的远程文件夹；服务器被删则提示并清理该记录。
+    func openSavedRemoteWorkspace(_ ref: SavedRemoteWorkspace) {
+        guard activeRemoteWorkspaceId != ref.id else { return }
+        guard let server = servers?.server(id: ref.serverID) else {
+            savedRemoteWorkspaces.removeAll { $0.id == ref.id }
+            persistRemoteWorkspaces()
+            if activeRemoteWorkspaceId == ref.id {
+                activeRemoteWorkspaceId = nil
+                UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceIdKey)
+            }
+            alertMessage = NSLocalizedString("服务器已删除", comment: "Server deleted alert")
+            treeDidChange()
+            return
+        }
+        openRemoteWorkspace(server: server, path: ref.path)
+    }
+
+    /// 移除远程文件夹记录（只删引用，不动远端文件）；若是当前工作区则断开并切回本地。
+    func removeRemoteWorkspace(_ ref: SavedRemoteWorkspace) {
+        savedRemoteWorkspaces.removeAll { $0.id == ref.id }
+        persistRemoteWorkspaces()
+        if activeRemoteWorkspaceId == ref.id {
+            disconnectRemote()
+            activateWorkspace(url: rootURL, name: localWorkspaceName, id: nil)
+        } else {
+            treeDidChange()
+        }
+    }
+
+    /// 断开远程文件连接并切回本地。
+    /// 只丢 SFTP 通道，不断整条 SSH 连接——终端 PTY 共用这条连接，
+    /// 断整条会把正在跑的终端会话一起杀掉。
     func disconnectRemote() {
         guard let fs = remoteFS else { return }
         remoteFS = nil
-        UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceKey)
         if let sftp = fs as? SFTPFileSystem {
             Task { await sftp.disconnect() }
         }
     }
 
-    /// 若当前远程工作区属于该服务器，先断开（删服务器时调用）。
+    /// 若当前远程工作区属于该服务器，先断开（删服务器时调用），
+    /// 该服务器的远程文件夹记录一并清理。
     func disconnectRemoteIfNeeded(serverID: UUID) {
+        savedRemoteWorkspaces.removeAll { $0.serverID == serverID }
+        persistRemoteWorkspaces()
+        if let activeId = activeRemoteWorkspaceId,
+           !savedRemoteWorkspaces.contains(where: { $0.id == activeId }) {
+            activeRemoteWorkspaceId = nil
+            UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceIdKey)
+        }
         if remoteServerID == serverID {
             disconnectRemote()
             activateWorkspace(url: rootURL, name: localWorkspaceName, id: nil)
+        } else {
+            treeDidChange()
         }
     }
 
-    private func persistRemoteWorkspace(serverID: UUID, path: String, scheme: String) {
-        let ref = SavedRemoteWorkspace(serverID: serverID, path: path, scheme: scheme)
-        if let data = try? JSONEncoder().encode(ref) {
-            UserDefaults.standard.set(data, forKey: Self.activeRemoteWorkspaceKey)
+    private func loadSavedRemoteWorkspaces() {
+        guard let data = UserDefaults.standard.data(forKey: Self.savedRemoteWorkspacesKey),
+              let list = try? JSONDecoder().decode([SavedRemoteWorkspace].self, from: data)
+        else { return }
+        savedRemoteWorkspaces = list
+    }
+
+    private func persistRemoteWorkspaces() {
+        if let data = try? JSONEncoder().encode(savedRemoteWorkspaces) {
+            UserDefaults.standard.set(data, forKey: Self.savedRemoteWorkspacesKey)
         }
     }
 
     /// App 启动后恢复上次的远程工作区（由 CodeEditApp 在 servers 就绪后调用一次）。
     func restoreRemoteWorkspaceIfNeeded(servers: ServerStore) {
+        guard !remoteRestoreAttempted else { return }
+        remoteRestoreAttempted = true
         guard remoteFS == nil,
-              let data = UserDefaults.standard.data(forKey: Self.activeRemoteWorkspaceKey),
-              let ref = try? JSONDecoder().decode(SavedRemoteWorkspace.self, from: data),
+              let idString = UserDefaults.standard.string(forKey: Self.activeRemoteWorkspaceIdKey),
+              let id = UUID(uuidString: idString),
+              let ref = savedRemoteWorkspaces.first(where: { $0.id == id }),
               let server = servers.server(id: ref.serverID) else { return }
-        // 占位，避免 onAppear 重复触发
-        UserDefaults.standard.removeObject(forKey: Self.activeRemoteWorkspaceKey)
         openRemoteWorkspace(server: server, path: ref.path)
     }
 

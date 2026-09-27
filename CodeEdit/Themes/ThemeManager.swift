@@ -23,8 +23,8 @@ enum ThemeManager {
         bundled.first { $0.file.displayName == displayName }?.file ?? fallbackFile()
     }
 
-    static func makeTheme(named displayName: String, fontSize: CGFloat) -> CETheme {
-        makeTheme(file(named: displayName), fontSize: fontSize)
+    static func makeTheme(named displayName: String, fontSize: CGFloat, monoFont: MonoFont) -> CETheme {
+        makeTheme(file(named: displayName), fontSize: fontSize, monoFont: monoFont)
     }
 
     // MARK: - 跟随系统配色
@@ -58,7 +58,7 @@ enum ThemeManager {
         return bundled.contains { $0.file.displayName == candidate } ? candidate : fallbackName
     }
 
-    static func makeTheme(_ file: CEThemeFile, fontSize: CGFloat) -> CETheme {
+    static func makeTheme(_ file: CEThemeFile, fontSize: CGFloat, monoFont: MonoFont) -> CETheme {
         var colors: [String: (color: UIColor, bold: Bool)] = [:]
         for (key, entry) in file.editor {
             if let color = CETheme.color(from: entry.color) {
@@ -69,7 +69,7 @@ enum ThemeManager {
             displayName: file.displayName,
             isDark: file.isDark,
             colors: colors,
-            fontSize: fontSize
+            font: monoFont.uiFont(size: fontSize)
         )
     }
 

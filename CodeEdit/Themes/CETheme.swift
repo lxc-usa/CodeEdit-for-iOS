@@ -48,7 +48,7 @@ final class CETheme: Theme {
     /// cetheme key -> (颜色, 是否粗体)，如 "keywords" -> (#FF7AB2, true)。
     private let colors: [String: (color: UIColor, bold: Bool)]
 
-    init(displayName: String, isDark: Bool, colors: [String: (color: UIColor, bold: Bool)], fontSize: CGFloat) {
+    init(displayName: String, isDark: Bool, colors: [String: (color: UIColor, bold: Bool)], font: UIFont) {
         self.displayName = displayName
         self.isDark = isDark
         self.colors = colors
@@ -58,7 +58,7 @@ final class CETheme: Theme {
 
         self.textColor = text
         self.background = bg
-        self.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        self.font = font
 
         self.caretColor = colors["insertionPoint"]?.color ?? .systemBlue
         // 选中高亮必须半透明，否则盖住文字看不清；主题给不透明色时降到 0.35，
@@ -76,7 +76,7 @@ final class CETheme: Theme {
         self.gutterBackgroundColor = bg
         self.gutterHairlineColor = text.withAlphaComponent(0.15)
         self.lineNumberColor = text.withAlphaComponent(0.45)
-        self.lineNumberFont = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        self.lineNumberFont = font
         self.selectedLinesLineNumberColor = text
         self.selectedLinesGutterBackgroundColor = .clear
 

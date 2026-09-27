@@ -164,9 +164,17 @@ struct FileBrowserView: View {
                 Label("打开文件夹…", systemImage: "folder.badge.plus")
             }
             Divider()
-            if workspace.isRemoteWorkspace {
-                Label(workspace.workspaceName, systemImage: "checkmark")
+            ForEach(workspace.savedRemoteWorkspaces) { ref in
+                Button {
+                    workspace.openSavedRemoteWorkspace(ref)
+                } label: {
+                    Label(
+                        workspace.remoteWorkspaceDisplayName(ref),
+                        systemImage: workspace.activeRemoteWorkspaceId == ref.id ? "checkmark" : "server.rack"
+                    )
+                }
             }
+            Divider()
             Button {
                 showRemoteFolderSheet = true
             } label: {
@@ -185,12 +193,16 @@ struct FileBrowserView: View {
             if workspace.isRemoteWorkspace {
                 Divider()
                 Button(role: .destructive) {
-                    // openLocalWorkspace 内部经 activateWorkspace 先断开远程再重建本地树；
-                    // 不能先调 disconnectRemote()，否则 isLocalWorkspace 变 true 会提前返回，
-                    // 根节点还停留在远程树上。
-                    workspace.openLocalWorkspace()
+                    // 与本地"移除此工作区"对等：删引用、不动远端文件，切回本地。
+                    // 只是临时断开（保留记录）的话，点"本地文件"即可。
+                    if let id = workspace.activeRemoteWorkspaceId,
+                       let ref = workspace.savedRemoteWorkspaces.first(where: { $0.id == id }) {
+                        workspace.removeRemoteWorkspace(ref)
+                    } else {
+                        workspace.openLocalWorkspace()
+                    }
                 } label: {
-                    Label("断开远程连接", systemImage: "wifi.slash")
+                    Label("移除此远程文件夹", systemImage: "trash")
                 }
             } else if !workspace.isLocalWorkspace {
                 Divider()
@@ -340,56 +352,42 @@ struct FileBrowserView: View {
 
 // MARK: - 打开远程文件夹
 
-/// 选服务器 + 填远端路径，打开后成为工作区（与本地"打开文件夹"对等）。
+/// 先选服务器，再像本地文件选择器一样逐层浏览远端目录，
+/// 点"打开"把当前目录作为工作区打开（与本地"打开文件夹"对等）。
 struct RemoteFolderSheet: View {
     @ObservedObject var workspace: WorkspaceStore
     @ObservedObject var servers: ServerStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var selectedID: UUID?
-    @State private var path: String = ""
     @State private var showServerManager = false
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("服务器") {
-                    if servers.servers.isEmpty {
-                        Button("添加服务器…") { showServerManager = true }
-                    } else {
-                        ForEach(servers.servers) { server in
-                            Button {
-                                selectedID = server.id
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(server.name)
-                                            .foregroundStyle(.primary)
-                                        Text(server.displayAddress)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if selectedID == server.id {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                                .contentShape(Rectangle())
+            Group {
+                if servers.servers.isEmpty {
+                    EmptyState(
+                        icon: "server.rack",
+                        title: "还没有服务器",
+                        message: "先添加一台 SSH 服务器，再浏览它的文件夹",
+                        actionTitle: "添加服务器",
+                        action: { showServerManager = true }
+                    )
+                } else {
+                    List(servers.servers) { server in
+                        NavigationLink {
+                            RemoteFolderBrowser(server: server, workspace: workspace) {
+                                dismiss()
                             }
-                            .buttonStyle(.plain)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(server.name)
+                                    .foregroundStyle(.primary)
+                                Text(server.displayAddress)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
-                }
-                Section("远程文件夹") {
-                    TextField("留空打开主目录，例如 /var/www", text: $path)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                }
-                Section {
-                    Text("经 SFTP 打开，之后可像本地一样浏览、编辑、保存，直接操作远端文件。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle(Text("打开远程文件夹"))
@@ -398,27 +396,177 @@ struct RemoteFolderSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: { Text("取消") }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        let id = selectedID ?? servers.servers.first?.id
-                        if let id, let server = servers.server(id: id) {
-                            workspace.openRemoteWorkspace(server: server, path: path)
-                        }
-                        dismiss()
-                    } label: {
-                        Text("打开")
-                    }
-                    .disabled(servers.servers.isEmpty)
-                }
-            }
-            .onAppear {
-                if selectedID == nil { selectedID = servers.servers.first?.id }
             }
             .sheet(isPresented: $showServerManager) {
                 ServerManagerView(workspace: workspace, servers: servers)
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// 远端目录浏览选择器：面包屑导航，点"打开"把当前目录作为工作区。
+private struct RemoteFolderBrowser: View {
+    let server: ServerConfig
+    @ObservedObject var workspace: WorkspaceStore
+    var onOpen: () -> Void
+
+    /// 当前目录；nil = 正在解析主目录。
+    @State private var currentPath: String?
+    @State private var entries: [RemoteFileEntry] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    private var directories: [RemoteFileEntry] {
+        entries.filter(\.isDirectory).sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// 面包屑：从主目录（显示为服务器名）逐级到当前目录。
+    private var crumbs: [(name: String, path: String)] {
+        guard let path = currentPath else { return [] }
+        let comps = path.split(separator: "/").map(String.init)
+        var result: [(name: String, path: String)] = []
+        var built = ""
+        for (i, comp) in comps.enumerated() {
+            built += "/" + comp
+            result.append((i == 0 ? server.name : comp, built))
+        }
+        return result
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 面包屑
+            if !crumbs.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(crumbs, id: \.path) { crumb in
+                            Button {
+                                navigate(to: crumb.path)
+                            } label: {
+                                Text(crumb.name)
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        crumb.path == currentPath
+                                            ? Color.accentColor.opacity(0.18)
+                                            : Color.secondary.opacity(0.12)
+                                    )
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                }
+                Divider()
+            }
+            Group {
+                if let errorMessage {
+                    EmptyState(
+                        icon: "wifi.exclamationmark",
+                        title: "读取失败",
+                        message: "\(errorMessage)",
+                        actionTitle: "重试",
+                        action: { Task { await reload() } }
+                    )
+                } else if currentPath == nil || (isLoading && entries.isEmpty) {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("正在加载…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if directories.isEmpty {
+                    EmptyState(
+                        icon: "folder",
+                        title: "没有子文件夹",
+                        message: "可直接打开当前目录",
+                        actionTitle: nil,
+                        action: nil
+                    )
+                } else {
+                    List(directories, id: \.path) { entry in
+                        Button {
+                            navigate(to: entry.path)
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.fill")
+                                    .foregroundStyle(.blue)
+                                    .frame(width: 22)
+                                Text(entry.name)
+                                    .lineLimit(1)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                }
+            }
+        }
+        .navigationTitle(Text(currentPath.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? server.name))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("打开") {
+                    if let path = currentPath {
+                        workspace.openRemoteWorkspace(server: server, path: path)
+                        onOpen()
+                    }
+                }
+                .disabled(currentPath == nil)
+            }
+        }
+        .task { await loadInitial() }
+        .onDisappear {
+            // 只丢 SFTP 通道，不断整条 SSH 连接（终端会话共用连接，不受影响）。
+            // 工作区打开后会用自己的 SFTPFileSystem 按需重建通道。
+            Task { await SFTPFileSystem(server: server).disconnect() }
+        }
+    }
+
+    private func navigate(to path: String) {
+        currentPath = path
+        Task { await reload() }
+    }
+
+    @MainActor
+    private func loadInitial() async {
+        isLoading = true
+        do {
+            let fs = SFTPFileSystem(server: server)
+            let home = try await fs.homeDirectory()
+            currentPath = home
+            await reload()
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
+
+    @MainActor
+    private func reload() async {
+        guard let path = currentPath else { return }
+        isLoading = true
+        errorMessage = nil
+        do {
+            let fs = SFTPFileSystem(server: server)
+            entries = try await fs.list(path: path)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
     }
 }
 

@@ -121,7 +121,7 @@ struct CodeEditorView: UIViewRepresentable {
     }
 
     private func themeKey() -> String {
-        "\(theme.displayName)-\(settings.fontSize)"
+        "\(theme.displayName)-\(settings.fontSize)-\(settings.monoFont.rawValue)"
     }
 
     // MARK: - Coordinator

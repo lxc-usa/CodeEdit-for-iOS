@@ -16,7 +16,7 @@ struct EditorAreaView: View {
             fallbackName: settings.themeName,
             systemDark: colorScheme == .dark
         )
-        return ThemeManager.makeTheme(named: name, fontSize: settings.fontSize)
+        return ThemeManager.makeTheme(named: name, fontSize: settings.fontSize, monoFont: settings.monoFont)
     }
 
     var body: some View {
@@ -35,6 +35,7 @@ struct EditorAreaView: View {
                         initialPath: nil,
                         servers: servers,
                         settings: settings,
+                        workspace: workspace,
                         isActive: isActive
                     )
                     .opacity(isActive ? 1 : 0)
@@ -57,7 +58,13 @@ struct EditorAreaView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    hideKeyboard()
+                } label: {
+                    Label("隐藏键盘", systemImage: "keyboard.chevron.compact.down")
+                }
+                .disabled(workspace.selectedDocument == nil && workspace.selectedTerminal == nil)
                 Button {
                     findController.presentFind()
                 } label: {
@@ -97,6 +104,18 @@ struct EditorAreaView: View {
                 scrollToSelectedSoon(proxy, animated: true)
             }
         }
+    }
+
+    /// 收起键盘：编辑器与终端通用。
+    /// 终端侧同时置位抑制标记——否则远端每来一次输出、每次 updateUIView
+    /// 都会把键盘再顶出来；点终端视图任意处或切标签时恢复（见 TerminalHostView）。
+    private func hideKeyboard() {
+        if workspace.selectedTerminal != nil {
+            workspace.isTerminalKeyboardSuppressed = true
+        }
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+        )
     }
 
     /// 保证当前标签（文档或终端）始终处在可见区域（同 openCoder 的处理）。

@@ -32,6 +32,39 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        List(MonoFont.allCases) { font in
+                            Button {
+                                settings.monoFont = font
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(font.displayName)
+                                            .font(font.font(size: 15))
+                                            .foregroundStyle(.primary)
+                                        Text(font.note)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if settings.monoFont == font {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .navigationTitle(Text("字体"))
+                    } label: {
+                        HStack {
+                            Text("字体")
+                            Spacer()
+                            Text(settings.monoFont.displayName)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     HStack {
                         Text("字号")
                         Spacer()
@@ -63,62 +96,6 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("编辑器")
-                }
-
-                Section {
-                    NavigationLink {
-                        List(MonoFont.allCases) { font in
-                            Button {
-                                settings.monoFont = font
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(font.displayName)
-                                            .font(font.font(size: 15))
-                                            .foregroundStyle(.primary)
-                                        Text(font.note)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if settings.monoFont == font {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .navigationTitle(Text("终端字体"))
-                    } label: {
-                        HStack {
-                            Text("字体")
-                            Spacer()
-                            Text(settings.monoFont.displayName)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    HStack {
-                        Text("字号")
-                        Spacer()
-                        Stepper(
-                            "\(Int(settings.monoFontSize))",
-                            value: $settings.monoFontSize,
-                            in: 10.0...20.0,
-                            step: 1
-                        )
-                    }
-                    Toggle(isOn: $settings.terminalResumeSession) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("会话保持")
-                            Text("离开终端后会话在后台继续，回来时接上")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("远程终端")
                 }
 
                 Section {

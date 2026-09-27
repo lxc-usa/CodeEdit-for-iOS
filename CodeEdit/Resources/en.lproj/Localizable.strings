@@ -189,3 +189,10 @@
 "远程文件夹" = "Remote Folder";
 "远程终端" = "Remote Terminal";
 "连接远程终端" = "Connect to Remote Terminal";
+"隐藏键盘" = "Hide Keyboard";
+"没有子文件夹" = "No Subfolders";
+"可直接打开当前目录" = "You can open the current directory directly";
+"正在加载…" = "Loading…";
+"读取失败" = "Failed to Load";
+"移除此远程文件夹" = "Remove This Remote Folder";
+"服务器已删除" = "Server Deleted";
