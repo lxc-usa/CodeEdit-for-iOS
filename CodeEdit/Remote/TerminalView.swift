@@ -152,56 +152,58 @@ private final class RotationSafeTerminalView: SwiftTerm.TerminalView {
             return
         }
         let vc = traitCollection.verticalSizeClass
-        log.append("padding: layoutSubviews, vc=\(vc.rawValue), accBounds=\(accessory.bounds)")
         // 只在横屏加留白
-        guard vc == .compact else {
-            log.append("padding: skip, not landscape")
-            return
-        }
+        guard vc == .compact else { return }
         // 确保 accessory 已布局
         accessory.layoutIfNeeded()
-        guard accessory.bounds.width > accessory.bounds.height else {
-            log.append("padding: skip, acc not wide (\(accessory.bounds))")
+        guard accessory.bounds.width > accessory.bounds.height else { return }
+
+        let buttons = accessory.subviews.compactMap { $0 as? UIButton }.filter { !$0.isHidden && $0.frame.width > 0 }
+        guard !buttons.isEmpty else {
+            log.append("padding: no visible buttons")
             return
         }
-
-        let buttons = accessory.subviews.compactMap { $0 as? UIButton }
-        log.append("padding: buttons=\(buttons.count)")
-        guard !buttons.isEmpty else { return }
         // 避免重复调整：用关联标记记录已调整过的宽度
         let widthKey = accessory.bounds.width
         if let lastWidth = objc_getAssociatedObject(accessory, &AccessoryPaddingAdjustedKey) as? CGFloat,
            lastWidth == widthKey {
-            log.append("padding: skip, already adjusted for width \(widthKey)")
             return
         }
 
-        guard let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }) else { return }
-        let keyW = leftmost.frame.width
-        log.append("padding: keyW=\(keyW), leftmost.x=\(leftmost.frame.minX)")
-        guard keyW > 0 else { return }
-        let shift = keyW - 2
-        guard shift > 0 else { return }
+        // 整排居中：算出所有键占据的左右边界，整体平移到居中位置，
+        // 两边自然留出等宽空白。不会组间重叠。
+        let minX = buttons.map { $0.frame.minX }.min() ?? 0
+        let maxX = buttons.map { $0.frame.maxX }.max() ?? 0
+        let occupied = maxX - minX
+        let totalW = accessory.bounds.width
+        // 目标：左右各留一键宽。一键宽取平均键宽。
+        let avgKeyW = occupied / CGFloat(buttons.count)
+        let targetMargin = avgKeyW
+        let targetMinX = targetMargin
+        let targetMaxX = totalW - targetMargin
+        let targetOccupied = targetMaxX - targetMinX
+        log.append("padding: buttons=\(buttons.count), occupied=\(occupied), totalW=\(totalW), avgKeyW=\(avgKeyW)")
 
-        let midX = accessory.bounds.width / 2
-        var leftMaxX: CGFloat = 0
-        var rightMinX: CGFloat = accessory.bounds.width
-        for b in buttons {
-            if b.frame.minX < midX {
-                b.frame.origin.x += shift
-                leftMaxX = max(leftMaxX, b.frame.maxX)
-            } else {
-                b.frame.origin.x -= shift
-                rightMinX = min(rightMinX, b.frame.minX)
+        if occupied > targetOccupied {
+            // 键太多，一键宽留白放不下：退而求其次，整排居中（两边等分剩余空间）。
+            let shift = (totalW - occupied) / 2 - minX
+            log.append("padding: too wide, center only, shift=\(shift)")
+            if abs(shift) < 0.5 {
+                objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                return
             }
-        }
-        log.append("padding: applied shift=\(shift), leftMaxX=\(leftMaxX), rightMinX=\(rightMinX)")
-        // 重叠则回退：重新布局恢复原状
-        if leftMaxX > rightMinX {
-            log.append("padding: overlap, revert")
-            accessory.setNeedsLayout()
-            accessory.layoutIfNeeded()
+            for b in buttons {
+                b.frame.origin.x += shift
+            }
+            objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             return
+        }
+
+        // 放得下：整排平移到 [targetMargin, totalW-targetMargin] 居中。
+        let shift = targetMinX + (targetOccupied - occupied) / 2 - minX
+        log.append("padding: shift=\(shift) for one-key margins")
+        for b in buttons {
+            b.frame.origin.x += shift
         }
         objc_setAssociatedObject(accessory, &AccessoryPaddingAdjustedKey, widthKey, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
