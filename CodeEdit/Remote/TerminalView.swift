@@ -25,21 +25,33 @@ extension TerminalAccessory {
     @objc func codeEdit_paddedLayoutSubviews() {
         // 先走原始布局（交换后这个调用实际执行原始实现）
         self.codeEdit_paddedLayoutSubviews()
-        // 只在横屏加留白
+        // 只在横屏加留白；竖屏保持 SwiftTerm 原样
         guard bounds.width > bounds.height else { return }
         let buttons = subviews.compactMap { $0 as? UIButton }
         guard !buttons.isEmpty else { return }
-        let sorted = buttons.sorted { $0.frame.minX < $1.frame.minX }
-        guard let first = sorted.first, let last = sorted.last else { return }
-        let keyW = first.frame.width
+        // v1.20.0 布局：左组（esc/ctrl/tab/~//- /F键）从 x=2 向右排；
+        // 右组（方向键等）锚定右边缘从 width-2 向左排。
+        // 做法：左组整体右移（左留一键宽），右组整体左移（右留一键宽）。
+        guard let leftmost = buttons.min(by: { $0.frame.minX < $1.frame.minX }) else { return }
+        let keyW = leftmost.frame.width
         guard keyW > 0 else { return }
-        // 原始布局后首键在 x=2；移到 x=keyW（左留一键宽）
-        let shift = keyW - first.frame.minX
-        // 右端也要留出至少一键宽，否则不动（保底，避免溢出）
-        let lastRight = last.frame.maxX + shift
-        guard bounds.width - lastRight >= keyW - 1 else { return }
+        let midX = bounds.width / 2
+        // 左移量：首键从 x=2 移到 x=keyW；右移量：末键从 width-2 移到 width-keyW
+        let shift = keyW - 2
+        var leftMaxX: CGFloat = 0
+        var rightMinX: CGFloat = bounds.width
         for b in buttons {
-            b.frame.origin.x += shift
+            if b.frame.minX < midX {
+                b.frame.origin.x += shift
+                leftMaxX = max(leftMaxX, b.frame.maxX)
+            } else {
+                b.frame.origin.x -= shift
+                rightMinX = min(rightMinX, b.frame.minX)
+            }
+        }
+        // 若左右两组重叠（内容太宽放不下一键宽），回退到原始布局（保底，不错乱）
+        if leftMaxX > rightMinX {
+            self.codeEdit_paddedLayoutSubviews()
         }
     }
 }
