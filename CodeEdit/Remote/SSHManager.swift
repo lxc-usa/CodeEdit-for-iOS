@@ -275,17 +275,17 @@ actor SSHManager {
         server: ServerConfig,
         operation: (SFTPClient) async throws -> T
     ) async throws -> T {
-        let sftp = try await sftp(for: server)
+        let sftpClient = try await sftp(for: server)
         do {
-            return try await operation(sftp)
+            return try await operation(sftpClient)
         } catch {
             guard isDeadChannelError(error) else { throw error }
             // 只丢弃"这次用的"旧通道：若并发中已有别人建好新通道并入缓存，
             // 用 identity 比较避免误杀。
-            if sftpClients[server.id] === sftp {
+            if sftpClients[server.id] === sftpClient {
                 sftpClients.removeValue(forKey: server.id)
             }
-            try? await sftp.close()
+            try? await sftpClient.close()
             let fresh = try await sftp(for: server)
             return try await operation(fresh)
         }
