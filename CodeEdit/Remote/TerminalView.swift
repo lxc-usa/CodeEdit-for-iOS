@@ -9,7 +9,7 @@ import ObjectiveC
 private enum TerminalInputAccessorySwizzle {
     static let apply: Void = {
         let original = #selector(getter: UIResponder.inputAccessoryView)
-        let replacement = #selector(RotationSafeTerminalView.codeEdit_inputAccessoryView)
+        let replacement = #selector(getter: RotationSafeTerminalView.codeEdit_inputAccessoryView)
         guard
             let m1 = class_getInstanceMethod(RotationSafeTerminalView.self, original),
             let m2 = class_getInstanceMethod(RotationSafeTerminalView.self, replacement)
