@@ -215,9 +215,12 @@ struct CodeEditorView: UIViewRepresentable {
                 if isPad {
                     keyW = 44; keyH = 44; fontSize = 22
                 } else if landscape {
-                    // 横屏对标系统键盘（用户 2026-09-27 真机截图实测）：
-                    // Q/W 键宽 66pt、键高 30pt、行距 34.4pt。
-                    keyW = 66; keyH = 30; fontSize = 21
+                    // 横屏：键高 30pt、栏高 34pt 对标系统键盘
+                    // （用户 2026-09-27 真机截图实测：键高 30pt、行距 34.4pt）；
+                    // 键宽则压缩到 15 个键一屏排下、不横滑
+                    // （用户 2026-09-27：不要左右滑动）。
+                    keyW = max(40, (bounds.width - 16 - 14 * 6) / 15)
+                    keyH = 30; fontSize = 20
                 } else {
                     // 竖屏：14 符号键 + 隐藏键共 15 个，挤一挤全部显示，不横滑
                     // （用户 2026-09-27：竖屏只差两三个键位，要求挤挤全显示）
