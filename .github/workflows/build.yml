@@ -45,6 +45,22 @@ jobs:
           echo "Bundled themes: $count"
           test "$count" -ge 4
 
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/DerivedData/SourcePackages
+          key: ${{ runner.os }}-swiftpkgs-${{ hashFiles('CodeEdit.xcodeproj/project.pbxproj') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpkgs-
+
+      - name: Cache DerivedData (build products)
+        uses: actions/cache@v4
+        with:
+          path: build/DerivedData/Build
+          key: ${{ runner.os }}-build-${{ hashFiles('CodeEdit/**/*.swift', 'project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-build-
+
       - name: Resolve Swift packages
         run: |
           xcodebuild -resolvePackageDependencies \
