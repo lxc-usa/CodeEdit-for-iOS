@@ -48,7 +48,18 @@ let targets: [Target] = [
         name: "SwiftTerm",
         dependencies: [],
         path: "Sources/SwiftTerm",
-        exclude: platformExcludes + ["Mac/README.md"],
+        // CodeEdit for iOS 定制（vendoring 精简）：Mac/ 下 6 个文件全是 `#if os(macOS)`
+        // 守卫的纯 macOS 代码，iOS 编译时本来就被跳过，这里直接 exclude 掉，
+        // 省 CI 编译时间。MacAccessibilityService.swift 保留——它是个无守卫小空壳，
+        // 被 iOS 的 iOSTerminalView.swift 引用。
+        exclude: platformExcludes + ["Mac/README.md",
+            "Mac/MacCaretView.swift",
+            "Mac/MacDebugView.swift",
+            "Mac/MacExtensions.swift",
+            "Mac/MacFindBarView.swift",
+            "Mac/MacLocalTerminalView.swift",
+            "Mac/MacTerminalView.swift",
+        ],
         plugins: [
             .plugin(name: "SwiftTermBuildInfoPlugin")
         ],
@@ -96,7 +107,18 @@ let targets: [Target] = [
 //            .product(name: "Subprocess", package: "swift-subprocess", condition: .when(platforms: [.macOS, .linux]))
 //        ],
         path: "Sources/SwiftTerm",
-        exclude: platformExcludes + ["Mac/README.md"],
+        // CodeEdit for iOS 定制（vendoring 精简）：Mac/ 下 6 个文件全是 `#if os(macOS)`
+        // 守卫的纯 macOS 代码，iOS 编译时本来就被跳过，这里直接 exclude 掉，
+        // 省 CI 编译时间。MacAccessibilityService.swift 保留——它是个无守卫小空壳，
+        // 被 iOS 的 iOSTerminalView.swift 引用。
+        exclude: platformExcludes + ["Mac/README.md",
+            "Mac/MacCaretView.swift",
+            "Mac/MacDebugView.swift",
+            "Mac/MacExtensions.swift",
+            "Mac/MacFindBarView.swift",
+            "Mac/MacLocalTerminalView.swift",
+            "Mac/MacTerminalView.swift",
+        ],
         resources: [
             .process("Apple/Metal/Shaders.metal")
         ],

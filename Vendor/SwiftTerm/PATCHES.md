@@ -31,3 +31,15 @@ accessory 是细长条（竖屏 393×36），宽永远大于高，会误判。
 注意2：`addOptional`（F1–F10）计算剩余空间时必须减去 `2 × landscapeSideMargin`。
 留白是真占用宽度的，不减会多加 3–4 个 F 键，它们被挤到方向键底下，
 键名尾数从 `←`/`↓` 后面露出来（2026-09-28 真机实锤横屏"3"、竖屏"1"）。
+
+## 精简（2026-09-28，CodeEdit for iOS）
+
+- `Package.swift`：SwiftTerm target 的 `exclude` 增加 `Mac/` 下 6 个纯 macOS 文件
+ （`MacCaretView.swift`、`MacDebugView.swift`、`MacExtensions.swift`、
+  `MacFindBarView.swift`、`MacLocalTerminalView.swift`、`MacTerminalView.swift`）。
+  它们全是 `#if os(macOS)` 守卫，iOS 编译时本来就被跳过（实测二进制里零残留），
+  exclude 只省 CI 编译时间，不影响包大小。
+- `Mac/MacAccessibilityService.swift` 保留：无守卫的 15 行小空壳，被 iOS 的
+  `iOSTerminalView.swift` 引用，删了编不过。
+- 结论：8.4MB 的包大小与 vendoring 无关（v1.0 远程依赖时也是 8.43MB）；
+  大头是 Runestone、Tree-sitter、swift-nio 等功能依赖，SwiftTerm 本体很小。
