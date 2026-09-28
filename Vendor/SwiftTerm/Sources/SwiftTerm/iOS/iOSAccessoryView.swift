@@ -226,7 +226,6 @@ public class TerminalAccessory: UIInputView, UIInputViewAudioFeedback {
         // CodeEdit for iOS 定制：横屏时左右各留一键宽。
         // 按键宽度 = 可用宽 / 按键数；左右各空一键 ≡ 分母 +2（13→15），
         // 算出的单键宽即为每侧留白，无需再整体压缩或位移。
-        let isLandscapeLayout = frame.width > frame.height
         let keyCountDivisor = importantKeysCount + (isLandscapeLayout ? 2 : 0)
         let maxSpaceForImportantKeys = frame.width - maxFuncKeyWidth - buttonPad
         var aditionalSpaceForImportantKeys: CGFloat = 0
@@ -324,12 +323,18 @@ return
     }
     
     var buttonPad = 4.0
+    /// 是否横屏（CodeEdit for iOS 定制）：用屏幕尺寸判断，不能用 accessory 自身
+    /// frame——它是个细长条（竖屏也宽>高），会误判。
+    var isLandscapeLayout: Bool {
+        let screenSize = UIScreen.main.bounds.size
+        return screenSize.width > screenSize.height
+    }
     /// 横屏留白宽度（CodeEdit for iOS 定制）：横屏时左右各空出一键宽，竖屏为 0。
     /// 在 setupUI() 里随按键宽度一起计算。
     var landscapeSideMargin: CGFloat = 0
     public override func layoutSubviews() {
         // 横屏：左右各空出一键宽（landscapeSideMargin 由 setupUI 计算）
-        let sideMargin: CGFloat = frame.width > frame.height ? landscapeSideMargin : 0
+        let sideMargin: CGFloat = isLandscapeLayout ? landscapeSideMargin : 0
         var x: CGFloat = 2 + sideMargin
         let dh = views.reduce (0) { max ($0, $1.frame.size.height )}
         
