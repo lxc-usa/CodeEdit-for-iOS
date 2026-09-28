@@ -277,6 +277,12 @@ public class TerminalAccessory: UIInputView, UIInputViewAudioFeedback {
             additionalUsedSpaceToAdd = 50.0
         }
         var left = frame.width - usedSpace - additionalUsedSpaceToAdd
+        // CodeEdit for iOS 定制：横屏两侧留白占用了 2×landscapeSideMargin 的宽度，
+        // F 功能键的可用空间必须减去，否则多加的 F 键会挤到方向键底下、
+        // 键名尾数从箭头键后面露出来（真机实锤的"3"）。
+        if isLandscapeLayout {
+            left -= landscapeSideMargin * 2
+        }
         func addOptional (_ text: String, _ selector: Selector) {
             left -= minWidth + buttonPad
             

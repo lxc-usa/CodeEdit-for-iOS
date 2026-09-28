@@ -27,3 +27,7 @@
 
 注意：横屏判断必须用 `UIScreen.main.bounds`，不能用 accessory 自身 frame——
 accessory 是细长条（竖屏 393×36），宽永远大于高，会误判。
+
+注意2：`addOptional`（F1–F10）计算剩余空间时必须减去 `2 × landscapeSideMargin`。
+留白是真占用宽度的，不减会多加 3–4 个 F 键，它们被挤到方向键底下，
+键名尾数从 `←`/`↓` 后面露出来（2026-09-28 真机实锤横屏"3"、竖屏"1"）。
