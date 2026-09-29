@@ -28,7 +28,8 @@ func markdownToHTML(_ markdown: String) -> String {
             }
             i += 1 // 跳过闭合围栏（没有也照样结束）
             let cls = lang.isEmpty ? "" : " class=\"language-\(escapeHTML(String(lang)))\""
-            html.append("<pre><code\(cls)>\(escapeHTML(code.joined(separator: "\n")))</code></pre>")
+            let codeText = escapeHTML(code.joined(separator: "\n"))
+            html.append("<pre><code\(cls)>\(codeText)</code></pre>")
             continue
         }
 
@@ -57,7 +58,8 @@ func markdownToHTML(_ markdown: String) -> String {
                 inner.append(stripped)
                 i += 1
             }
-            html.append("<blockquote>\n\(markdownToHTML(inner.joined(separator: "\n"))\n</blockquote>")
+            let innerHTML = markdownToHTML(inner.joined(separator: "\n"))
+            html.append("<blockquote>\n\(innerHTML)\n</blockquote>")
             continue
         }
 
@@ -102,7 +104,8 @@ func markdownToHTML(_ markdown: String) -> String {
             i += 1
         }
         if let lv = setext {
-            html.append("<h\(lv)>\(renderInlineMarkdown(para.joined(separator: " ")))</h\(lv)>")
+            let headingText = renderInlineMarkdown(para.joined(separator: " "))
+            html.append("<h\(lv)>\(headingText)</h\(lv)>")
         } else if !para.isEmpty {
             let rendered = para.map { pl -> String in
                 var l = pl
