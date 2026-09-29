@@ -4,6 +4,30 @@
 
 > CodeEdit macOS 版的核心编辑器基于 AppKit，无法直接编译到 iOS。本项目保留它的设计语言与主题体系，编辑器内核采用 iOS 原生的 [Runestone](https://github.com/simonbs/Runestone)（Tree-sitter 语法高亮）。
 
+<!-- ipa-release:start -->
+## 📦 固定取包地址（永久有效）
+
+**下载（链接永久不变）：** [CodeEdit-latest.ipa](https://raw.githubusercontent.com/lxc-usa/CodeEdit-for-iOS/main/dist/CodeEdit-latest.ipa)
+
+| 项目 | 内容 |
+|---|---|
+| 当前版本 | v21.18（横屏 F 键残影修复） |
+| 文件大小 | 8,431,627 字节（约 8.0 MB） |
+| MD5 | `9d3ff43dc5dd96d6b2e908861d8cf593` |
+| SHA256 | `586dc26d78a6db86711b96b930b34b30faaa81fc63474e3a79f13356ddbaba53` |
+| Bundle ID | `one.lxc.codeedit` |
+| 系统要求 | iOS 17.0+ |
+
+每次有新包，更新的都是上面这一个地址，不再发临时链接。
+
+### 安装步骤（未签名 IPA）
+1. 点上面的固定地址下载 IPA；
+2. 用爱思助手 / Sideloadly / AltStore 等工具自行签名后安装到 iPhone/iPad；
+3. 安装前可核对文件大小与校验值，确认下载完整。
+
+> 若本节暂时没有可下载的包，会明确写"暂无可下载版本"，不会留空。
+<!-- ipa-release:end -->
+
 ## 功能
 
 ### 代码编辑
