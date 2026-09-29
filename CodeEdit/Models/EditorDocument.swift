@@ -2,16 +2,32 @@ import Combine
 import Foundation
 import Runestone
 
+/// 源码 / 预览视图模式（仅 md/html 等可预览文件有效）。
+enum DocumentViewMode: Hashable {
+    case source
+    case preview
+}
+
 /// 一个打开的编辑器标签页。
 final class EditorDocument: Identifiable, ObservableObject {
     let id: String
     let url: URL
     @Published var text: String
     @Published var isDirty = false
+    /// 源码 / 预览切换（仅 isPreviewable 时有效），默认源码。
+    @Published var viewMode: DocumentViewMode = .source
     /// 由文件扩展名判定的 Tree-sitter 语言，nil 表示纯文本。
     let language: TreeSitterLanguage?
     /// 远程文档：打开时由 WorkspaceStore 注入，保存时走远程文件系统。
     var remoteFS: (any RemoteFileSystem)?
+
+    /// 可预览的文件扩展名：markdown / html。
+    private static let previewableExtensions: Set<String> = ["md", "markdown", "htm", "html"]
+
+    /// 是否支持源码/预览切换（按扩展名判定）。
+    var isPreviewable: Bool {
+        Self.previewableExtensions.contains(url.pathExtension.lowercased())
+    }
 
     var displayName: String { url.lastPathComponent }
 

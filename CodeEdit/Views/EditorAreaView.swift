@@ -47,15 +47,13 @@ struct EditorAreaView: View {
                     .allowsHitTesting(isActive)
                 }
                 if workspace.selectedTerminal == nil {
-                    if let doc = workspace.selectedDocument {
-                        CodeEditorView(
-                            document: doc,
+                    if workspace.selectedDocument != nil {
+                        ObservedDocumentView(
+                            workspace: workspace,
                             settings: settings,
                             theme: theme,
-                            findController: findController,
-                            workspace: workspace
+                            findController: findController
                         )
-                        .id(doc.url)
                     } else {
                         WelcomeView(workspace: workspace)
                     }
@@ -64,14 +62,7 @@ struct EditorAreaView: View {
         }
         .toolbar(workspace.isTopBarsHidden ? .hidden : .visible, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    findController.presentFind()
-                } label: {
-                    Label("查找", systemImage: "magnifyingglass")
-                }
-                .disabled(workspace.selectedDocument == nil)
-            }
+            EditorToolbarContent(workspace: workspace, findController: findController)
         }
         // 切标签 / 关到无标签（欢迎页无滚动视图）时恢复顶部栏，避免困在隐藏状态
         .onChange(of: workspace.selectedDocument?.id) { _, _ in
@@ -140,6 +131,106 @@ struct EditorAreaView: View {
     }
 }
 
+/// 观察单个文档（含 viewMode）：在源码编辑器与预览之间切换。
+/// 单独成视图是因为 EditorAreaView 只观察 workspace，直接读 doc.viewMode
+/// 不会触发刷新；这里用 @ObservedObject 包一层，切换分段控件时即时重绘。
+/// `.id("source"/"preview")` 保证切换模式时底层 UIView 重建，不残留旧状态。
+private struct ObservedDocumentView: View {
+    @ObservedObject var workspace: WorkspaceStore
+    @ObservedObject var settings: SettingsStore
+    var theme: CETheme
+    var findController: FindController
+
+    var body: some View {
+        if let doc = workspace.selectedDocument {
+            ObservedDocumentInnerView(
+                document: doc,
+                settings: settings,
+                theme: theme,
+                findController: findController,
+                workspace: workspace
+            )
+            .id(doc.url)
+        }
+    }
+}
+
+private struct ObservedDocumentInnerView: View {
+    @ObservedObject var document: EditorDocument
+    @ObservedObject var settings: SettingsStore
+    var theme: CETheme
+    var findController: FindController
+    @ObservedObject var workspace: WorkspaceStore
+
+    var body: some View {
+        if document.isPreviewable && document.viewMode == .preview {
+            PreviewContainerView(document: document, theme: theme, workspace: workspace, settings: settings)
+                .id("preview")
+        } else {
+            CodeEditorView(
+                document: document,
+                settings: settings,
+                theme: theme,
+                findController: findController,
+                workspace: workspace
+            )
+            .id("source")
+        }
+    }
+}
+
+// MARK: - 工具栏
+
+/// 工具栏内容：预览开关与查找按钮都依赖 document.viewMode，
+/// 必须由直接观察 document 的视图驱动，否则切换模式时按钮状态不更新。
+private struct EditorToolbarContent: ToolbarContent {
+    @ObservedObject var workspace: WorkspaceStore
+    var findController: FindController
+
+    var body: some ToolbarContent {
+        if let doc = workspace.selectedDocument {
+            DocumentToolbarContent(document: doc, findController: findController)
+        } else {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    findController.presentFind()
+                } label: {
+                    Label("查找", systemImage: "magnifyingglass")
+                }
+                .disabled(true)
+            }
+        }
+    }
+}
+
+private struct DocumentToolbarContent: ToolbarContent {
+    @ObservedObject var document: EditorDocument
+    var findController: FindController
+
+    var body: some ToolbarContent {
+        // md/html 文件：源码 / 预览切换
+        ToolbarItem(placement: .topBarTrailing) {
+            if document.isPreviewable {
+                Picker("视图", selection: $document.viewMode) {
+                    Text("源码").tag(DocumentViewMode.source)
+                    Text("预览").tag(DocumentViewMode.preview)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 132)
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                findController.presentFind()
+            } label: {
+                Label("查找", systemImage: "magnifyingglass")
+            }
+            // 预览模式下没有编辑器，查找不可用
+            .disabled(document.isPreviewable && document.viewMode == .preview)
+        }
+    }
+}
+
 /// 单个标签页：同时观察文档（dirty 圆点）与工作区（选中高亮）。
 private struct DocTab: View {
     @ObservedObject var doc: EditorDocument
@@ -152,6 +243,12 @@ private struct DocTab: View {
                 Circle()
                     .fill(.orange)
                     .frame(width: 8, height: 8)
+            }
+            // 预览模式中的标签页：眼睛图标提示当前是渲染预览而非源码
+            if doc.isPreviewable && doc.viewMode == .preview {
+                Image(systemName: "eye")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             Text(doc.displayName)
                 .font(.subheadline)
