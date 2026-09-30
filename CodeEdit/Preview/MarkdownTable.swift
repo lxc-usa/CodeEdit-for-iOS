@@ -79,6 +79,7 @@ func fenceMarker(_ line: String) -> Character? {
 func startsBlockElement(_ line: String) -> Bool {
     let t = line.trimmingCharacters(in: .whitespaces)
     guard !t.isEmpty else { return true }
+    if isHTMLBlockStart(t) { return true }
     if t.hasPrefix("#") || t.hasPrefix(">") { return true }
     if t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("+ ") { return true }
     if t == "-" || t == "*" || t == "+" { return true }

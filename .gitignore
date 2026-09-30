@@ -4,7 +4,6 @@
 build/
 DerivedData/
 *.ipa
-!dist/
 *.dSYM.zip
 *.dSYM
 

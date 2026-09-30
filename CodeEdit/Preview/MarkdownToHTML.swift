@@ -85,7 +85,20 @@ func markdownToHTML(_ markdown: String) -> String {
             continue
         }
 
-        // 7. 段落（含 setext 标题：下一行是 === / --- 则整段变标题）
+        // 7. HTML 块（SVG 等内嵌 HTML 原样透传，遇到空行结束）
+        if isHTMLBlockStart(t) {
+            var raw: [String] = []
+            while i < lines.count {
+                let lt = lines[i].trimmingCharacters(in: .whitespaces)
+                if lt.isEmpty { break }
+                raw.append(lines[i])
+                i += 1
+            }
+            html.append(raw.joined(separator: "\n"))
+            continue
+        }
+
+        // 8. 段落（含 setext 标题：下一行是 === / --- 则整段变标题）
         var para: [String] = []
         var setext: Int?
         while i < lines.count {
@@ -98,6 +111,7 @@ func markdownToHTML(_ markdown: String) -> String {
             if isHR(lt) { break }
             if listMarker(lt) != nil { break }
             if parseTable(at: lines, index: i) != nil { break }
+            if isHTMLBlockStart(lt) { break }
             // setext 优先于 hr：foo\n--- 是二级标题不是分隔线
             if let lv = setextLevel(lt), !para.isEmpty { setext = lv; i += 1; break }
             para.append(cur)
@@ -138,6 +152,21 @@ func parseATXHeading(_ t: String) -> (level: Int, text: String)? {
         text = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
     }
     return (level, text)
+}
+
+/// HTML 块起始行：<div>、</div>、<!-- -->、<!DOCTYPE ...> 等。
+/// 排除 <https://...> 自动链接和 <foo@bar.com> 邮箱（标签名后紧跟 : 或 @ 的不是标签）。
+func isHTMLBlockStart(_ t: String) -> Bool {
+    guard t.hasPrefix("<") else { return false }
+    var s = t.dropFirst()
+    if s.hasPrefix("/") { s = s.dropFirst() }
+    else if s.hasPrefix("!") { return true } // <!-- / <!DOCTYPE
+    guard let first = s.first, first.isLetter else { return false }
+    let name = s.prefix(while: { $0.isLetter || $0.isNumber || $0 == "-" })
+    let rest = s.dropFirst(name.count)
+    if rest.hasPrefix(":") || rest.hasPrefix("@") { return false }
+    guard let r = rest.first else { return true }
+    return r == ">" || r == "/" || r.isWhitespace
 }
 
 /// 列表标记 → (是否有序, 标记长度)。`-`/`1.` 单独成行也算空条目。
